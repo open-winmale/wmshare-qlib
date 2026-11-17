@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import pytest
 
+pytest.importorskip("polars", reason="vnpy.alpha adapter requires polars")
+
 import wmshare_qlib.vnpy_alpha as va
 
 SYMBOLS = ["600519", "000858"]

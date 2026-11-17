@@ -423,6 +423,16 @@ def cmd_write_universe(args: argparse.Namespace) -> None:
     if not codes:
         raise SystemExit("universe source produced no codes")
 
+    # hygiene guards BEFORE any client creation: the CLI must fail fast on
+    # argument mistakes without touching credentials (CI has none - a live
+    # client built first turned a SystemExit into an AuthError there)
+    if args.exclude_st or args.exclude_suspended:
+        if not args.live:
+            raise SystemExit("hygiene filtering needs --live (snapshot batch)")
+        if args.max_ec is None:
+            raise SystemExit("hygiene filtering requires --max-ec (snapshot "
+                             "batch bills per ticket, ~100 EC/票)")
+
     # normalize codes -> qlib instruments (explicit mapping; no digit-range guesses)
     client = fetch._client(live=bool(args.live))
     instrument_map = normalize.build_instrument_map(client)
@@ -440,11 +450,6 @@ def cmd_write_universe(args: argparse.Namespace) -> None:
         print("[warn]", f"{len(unmapped)} code(s) unmapped (dropped): {unmapped[:5]}")
 
     if args.exclude_st or args.exclude_suspended:
-        if not args.live:
-            raise SystemExit("hygiene filtering needs --live (snapshot batch)")
-        if args.max_ec is None:
-            raise SystemExit("hygiene filtering requires --max-ec (snapshot "
-                             "batch bills per ticket, ~100 EC/票)")
         hyg = fetch.filter_universe_hygiene(
             instruments, client=client, exclude_st=args.exclude_st,
             exclude_suspended=args.exclude_suspended, max_ec=args.max_ec,
