@@ -1,10 +1,15 @@
 # wmshare-qlib
 
+[![CI](https://github.com/open-winmale/wmshare-qlib/actions/workflows/ci.yml/badge.svg)](https://github.com/open-winmale/wmshare-qlib/actions/workflows/ci.yml)
+
 > **Powered by [wmshare](https://github.com/) — this repository turns wmshare's CN/HK
 > data into a Qlib-native data layer.** The goal is to bring wmshare to the largest
 > A-share AI-quant research community (Qlib) and earn GitHub stars for wmshare.
 
 ## Status: Phase 1 MVP (closed-loop validated, 2026-11-16)
+
+> 后续优化方向调研见 [docs/optimization-roadmap.md](docs/optimization-roadmap.md)
+> （2026-11-17：增量模式 / 真实 factor / 截面降本 / CI，含三个待 probe 假设）。
 
 | Layer | Data | Qlib landing | Backtestable |
 |---|---|---|---|
@@ -82,12 +87,169 @@ Three enforced rules (not just documentation):
   long-panel fragments and merge + dump once all symbols are present. A manifest
   guards against mixing panels fetched with different `n`/`fields`/`live`/`freq`.
 
+### M6-lite: incremental daily updates (`update-history`, live + hfq only)
+
+```bash
+# 0) one-time bulk (as above)
+wmshare-qlib dump-history --live --symbols 600519 000858 --n 60 --max-ec 20000 \
+  --out ./out/qlib_data
+
+# 1) daily: fetch NEW bars only, reconcile, re-dump the full .bin (dump is free)
+wmshare-qlib update-history --live --max-ec 20000 --out ./out/qlib_data
+```
+
+Design (verified against deterministic pricing, roadmap §2.5):
+- **Per symbol**: dual kline tail `bars(n=k, adj="hfq")` + `bars(n=k, adj=None)`
+  — k = gap days + `--tail-overlap` (default 5) — plus a moneyflow tail.
+  Cost ≈ `2×(156+67k)` EC; a daily run (k≈6) ≈ **1.1k EC/票/天** vs the ~7.4k
+  full bundle → **~6.5×**. The dual pull is REQUIRED: `kline.batch_live`
+  serves the raw live price with UNVERIFIED ex-div semantics (its `percent`
+  basis on ex-div days cannot be probed on demand), while `bars(n=k)` returns
+  hfq AND raw AND the exact factor in one merge. batch_live stays a documented
+  follow-up, not a silent shortcut.
+- **Reconciliation gate**: tail rows overlapping stored history must agree
+  within float tolerance (hfq/raw prices, moneyflow, historical valuation are
+  immutable upstream). Any disagreement — an upstream history revision — fails
+  loud in `resume.load_panel_with_tail`; history is never silently rewritten.
+- **Valuation cadence** (`--valuation-days`, default 7): the 3y valuation
+  series refreshes only when due (it dominates EC: ~712 EC per metric);
+  size your universe to your budget — at CSI300 scale weekly valuation is
+  ~850k EC/week. The cadence advances only when the refresh actually
+  succeeded (a failed refresh retries next run).
+- **Stale guard** (`--tail-max-n`, default 30): a gap needing more bars than
+  this is skipped with a warning (tail no longer cheaper than a full re-pull).
+- **hfq_factor only, live only**: appends need the immutable hfq basis
+  (qfq_const re-anchors at every ex-div event, so appended bars would not
+  line up with stored history); demo snapshot has neither adj= nor windows.
+  Stores built before the `adjust` param (or under another convention) are
+  refused — conventions are never mixed in one dump.
+- **Full re-dump every time**: the .bin rebuild is local IO (zero EC); the
+  single-global-calendar invariant stays trivial because only the FETCH is
+  incremental.
+
+### M7-lite: sustainable daily cross-section (`--via snapshot`, P0-3)
+
+The server does not serve screener index subsets (`index.hs300` -> "not
+loadable", probe 2026-11-17) and `screener.query` bills the SCANNED universe —
+so the scan size cannot be narrowed client-side on that path. The
+`kline.snapshot` BATCH accepts an explicit symbol list and bills per ticket:
+**it is the only path where the operator controls the scanned universe**.
+
+```bash
+# daily cross-section over an explicit ~300-name universe (~17-30k EC/day)
+wmshare-qlib dump-cross-section --live --via snapshot \
+  --symbols 600519 000858 601318 ... --max-ec 50000 --out ./out/score
+
+# accumulate it (same dispatch)
+wmshare-qlib accumulate --live --via snapshot --symbols ... --max-ec 50000
+```
+
+Honesty notes:
+- **Two score families, never blurred**: screener = fundamentals composite
+  (`$PE_TTM_LAST` etc., full-market ~204k EC — monthly cadence); snapshot =
+  TECHNICAL COMPOSITE (`config.SNAPSHOT_METRICS`: chg_20d / roi_1y / ma60_up
+  higher_better, mv lower_better — declared directions, z-score composite,
+  per-ticket ~100 EC at N=3). The metering note labels the family so the
+  score meta never mixes them.
+- **Universe hygiene gates**: universe intersected with `stocks.list`;
+  ST / suspended rows DROPPED with warnings (never scored); rows missing any
+  metric value DROPPED (anti-pitfall #5 — never filled 0).
+- **Guards**: `>= 3` symbols (fewer would silently fall back to per-ticket
+  evaluation at ~10,250 EC each); `--max-ec` REQUIRED, checked post-hoc via
+  `client.last_ec_cost`.
+- **Cost anchors**: ~100 EC/票 measured at N=3 (docstring claims ~58/票 at
+  large batches — the N=300 unit price is a pending probe); a stray
+  out-of-index ticket falls back per-ticket (~10k EC) which the ceiling
+  catches.
+- Index membership files are operator-supplied for now (a real CSI300
+  membership source is the P1-1 universe-file item, not silently guessed).
+
+### P1-1: universe files (`write-universe`, P1-1)
+
+`D.instruments("<name>")` needs `instruments/<name>.txt` — Qlib convention
+`<INSTRUMENT>\t<start>\t<end>` per line. The adapter now writes them:
+
+```bash
+# from a real index membership (live; indices.members — cost NOT yet probed)
+wmshare-qlib write-universe --qlib-dir ./out/qlib_data --name csi300 \
+  --index index.hs300 --live
+
+# from an operator codes file (offline; bare codes map via stocks.list,
+# qlib-style SH600519 passes through — never digit-range guesses)
+wmshare-qlib write-universe --qlib-dir ./out/qlib_data --name csi300 \
+  --codes-file csi300_codes.txt
+
+# optional hygiene pre-pass: drop ST/suspended BEFORE fetching history
+# (~100 EC/票 snapshot batch, --max-ec required)
+wmshare-qlib write-universe --qlib-dir ./out/qlib_data --name csi300 \
+  --codes-file csi300_codes.txt --live --exclude-st --exclude-suspended \
+  --max-ec 50000
+```
+
+Honesty notes:
+- **Ranges are what the dump CONTAINS**: `[start, end]` derive from each
+  instrument's .bin header vs the global calendar — a suspended or
+  late-listed member never pretends to have traded days it does not have.
+  Members without dumped data are dropped with a warning, never fabricated.
+- **Demo degradation**: `--index` is live-only (the demo client has no
+  `indices` namespace, verified offline); codes-file + demo `stocks.list`
+  mapping works offline. `indices.members` cost is a pending probe
+  (roadmap §5.6).
+- The example scripts' hand-written `backtest_universe.txt` hack is now
+  superseded: `D.instruments("csi300")` works directly on a dumped dir.
+
+### P1-2: deep history (`--years N`, opt-in — read this first)
+
+```bash
+# ALWAYS dry-run first: deep history is EXPENSIVE and per-bar pricing beyond
+# 500 bars is an extrapolation (probe pending, roadmap §5)
+wmshare-qlib dump-history --dry-run --live --years 5 --max-ec ...
+# then fire
+wmshare-qlib dump-history --live --years 5 --symbols 600519 000858 --max-ec ...
+```
+
+- `--years N` maps to `n = 250×N` bars (one call; the client's served-bar cap
+  is raised automatically, SDK hard cap 10,000 bars ≈ full A-share history
+  back to 1991). Mutually exclusive with `--n`. Range queries (`begin/end`)
+  are NOT used — falsified probe (they force-pay `max_limit` bars regardless
+  of window; roadmap §2.5).
+- **Cost honesty**: `n=1250` (5y) ≈ **190k EC/票 estimated** with the
+  dual-pull hfq_factor path; per-bar pricing beyond the 500-bar probe point is
+  a LINEAR EXTRAPOLATION — the dry-run labels it `EXTRAPOLATED` and you should
+  treat it as a lower bound until re-probed. csi300-scale deep history
+  (~24M+ EC) is explicitly NOT recommended; deep history is for small
+  one-time builds.
+- **Valuation stays 3y** (server-side hard cap — no backfill, ever; the
+  honest extension is daily accumulation).
+
 ### On `factor` (Qlib-required field)
 
-wmshare returns **qfq-adjusted prices directly** (no factor column). Under our
-declared `qfq_const` convention the adapter emits `factor = 1.0` explicitly for
-every date, so Qlib's standard field set is complete and the declaration is
-self-consistent — never silently omitted. No double-adjustment risk.
+Two declared conventions (`config.ADJUSTMENT_MODES`, resolved by
+`config.adjustment_mode(live, requested)`):
+
+- **`hfq_factor` (live default, P0-2')**: prices stored in
+  open/high/low/close are **hfq** (back-adjusted, IPO-anchored) values served
+  by wmshare; the adapter pulls kline **twice** (`adj="hfq"` + raw) and emits
+  the real `factor = hfq/raw`. Qlib convention verified against upstream
+  `scripts/data_collector/yahoo/collector.py` (`YahooNormalize1d.adjusted_price`):
+  stored close IS the adjusted price, `raw = close / factor`, and
+  `volume_adj = raw / factor` — which the adapter applies because the probe
+  showed **upstream volume is NOT adjusted** (raw volume == hfq volume,
+  2026-11-17, 600519: factor 8.6463, dates align 1:1). hfq past values never
+  change when a new corporate action occurs → fragments stay valid, daily
+  bars append cleanly (the qfq re-anchoring problem is gone). Live kline EC
+  doubles (deterministic: `156 + 67·n` per call, see the roadmap's §2.5).
+- **`qfq_const` (demo, forced)**: the demo snapshot supports neither `adj=`
+  nor date ranges (upstream UsageError), so prices are qfq and `factor = 1.0`
+  is emitted explicitly on every date. Caveat stays: qfq re-anchors at every
+  corporate action, so demo fragments fetched across an ex-div event are
+  mutually inconsistent — live hfq_factor is the fix, demo is pipeline-only.
+
+Both paths are gated: `panel.assert_panel_integrity` fails loud if `factor`
+is non-positive or DECREASES along dates (hfq is cumulative; a decrease means
+mixed-convention fragments or upstream inconsistency). The resume manifest
+refuses stores that predate the `adjust` param key — never mix conventions
+in one dump.
 
 ### M2 backtest result (demo, 10 names × 120 days — pipeline proof, not alpha claim)
 
@@ -153,12 +315,48 @@ class of hole:
   2026-11-17): identical duplicates are deduped at the fetch layer WITH a
   warning, conflicting duplicates raise loud. The previous behaviour —
   `pivot_table(aggfunc="last")` — swallowed this silently for months.
+- **Factor monotonicity (P0-2').** `factor` must be positive and
+  non-decreasing along dates per instrument (hfq is IPO-anchored cumulative;
+  qfq_const's constant 1.0 passes trivially). Backstop for the resume
+  manifest's convention guard.
+- **Bulk/tail reconciliation (P0-1).** Every tail row overlapping a stored
+  bulk row must agree within float tolerance; a disagreement (upstream
+  history revision, or a convention mix that slipped past the manifest
+  guard) raises before any dump. History is never silently rewritten.
+
+## Ops: retries & pre-flight budgets (P1-3)
+
+- **Transient retry, narrow by design**: per-symbol HISTORY calls only
+  (kline adj/raw, moneyflow, valuation metrics) get ONE bounded retry
+  (`fetch.RETRY_ATTEMPTS = 2`) on `TransportError` / `ServerError` /
+  rate-limit-429 — honouring the SDK's `retry_after`. NEVER retried:
+  `QuotaError` (exhausted quota; it subclasses LimitError, so the exclusion is
+  explicit), `AuthError`/`UsageError`/`ApiError`/`DataError` (permanent), and
+  the big one-shot queries (`screener.query`, `kline.snapshot`) — a timeout
+  mid-materialization must not double-bill; `--max-ec` is their only guard.
+  EC metering fires after EVERY attempt (a failed attempt may still have
+  billed), and retries surface as warnings, never silently.
+- **`--dry-run` pre-flight quotes** on `dump-history` / `update-history` /
+  `dump-cross-section` / `accumulate`: a pure-local plan (no store write, no
+  request) over the measured deterministic anchors (`config.EC_*`,
+  roadmap §2.5). Estimates flag when they exceed `--max-ec`. The paid
+  `metering.ec_cost` remains the only real quote.
 
 ## EC transparency
 
 Batching saves **requests**, not **EC** — wmshare bills by symbol/compute. Every
 fetch result carries `metering` (`requests`, `ec_cost`, `note`) written to
 `fetch_meta.json` / `*.meta.json`. Demo mode has no EC meter and says so explicitly.
+
+**Deterministic pricing (probed 2026-11-17, 11 calls, ~54.6k EC — full table in
+`docs/optimization-roadmap.md` §2.5):** `kline = 156 + 67·served_bars` EC,
+`moneyflow = 156 + 16·n`, `batch_live ≈ 45 EC/票`, `kline.snapshot ≈ 100 EC/票`
+(N=3). Two corrections to the earlier anchors below: EC volatility came from
+DIFFERENT served bar counts, not cache states; and "kline itself is cheap" was
+wrong — at n=60 a single kline call (4,176 EC) exceeds all four valuation calls
+combined. Range queries (`begin/end`) force-pay `max_limit` (default 500) bars —
+never use them for increments (measured 33,656 EC for a ~60-bar window).
+The bundle re-probe to refresh the per-symbol anchors below is still pending.
 
 Measured cost anchors (2026-11-17, live, calibrated over four probes):
 - History fetch: ~**4,275 EC per symbol** (4 × valuation 3y ≈ 712 EC each dominate;
@@ -174,22 +372,26 @@ Measured cost anchors (2026-11-17, live, calibrated over four probes):
 - `screener.query --idx` subsetting is NOT currently served (server runtime
   index map only holds the daily full-market index; `index.hs300` returned
   "not loadable"). `stocks.list` mapping costs **66 EC** and covers 5,693 names.
-- Sustainable daily cadence today: **not full-market** (~200k/day). Either run
-  the cross-section weekly (~200k/week), or rebuild the score offline from the
-  cached wide frame, or wait for a server-side fixed-cost board endpoint.
+- Sustainable daily cadence (updated 2026-11-17, P0-3): full-market screener
+  stays **weekly or monthly** (~200k EC/query). The DAILY path is
+  `--via snapshot` over an explicit ~300-name universe (~17-30k EC/day,
+  technical composite family — see M7-lite above); full-market daily remains
+  not viable on any current endpoint.
 
 ## Module map
 
 - `config.py` — field lists, units, direction expectations, metric-code selection
-- `normalize.py` — the five anti-pitfall guards (direction, code mapping, unit, cold cache)
-- `fetch.py` — demo/live acquisition + metering
-- `panel.py` — integrity assertions + wide transform
+- `normalize.py` — the five anti-pitfall guards (direction, code mapping, unit, cold cache); `merge_adjusted_klines` (hfq+raw → factor, P0-2')
+- `fetch.py` — demo/live acquisition + metering; bulk (`fetch_history_panel`) and incremental tail (`fetch_history_tail`, P0-1) share the EC-ceiling executor
+- `panel.py` — integrity assertions (incl. the factor gate) + wide transform
 - `dump.py` — Qlib-compatible `.bin` dumper (Qlib-free)
 - `format.py` — the `.bin` on-disk contract (single source of truth) + pure-numpy self-check reader
 - `qlib_io.py` — **the only module that imports Qlib**; child-process read-back + score reader
 - `vnpy_alpha.py` — **the only module that imports vnpy**; panel → `AlphaDataset.add_feature` injection
+- `resume.py` — fragment store (bulk + P0-1 tails) + manifest with the convention guard and the bulk/tail reconciliation gate
 - `cross_section.py` — score CSV + accumulation/promotion
-- `cli.py` — command entry points
+- `estimate.py` — pre-flight EC estimator over the measured anchors (P1-3 `--dry-run`)
+- `cli.py` — command entry points (`dump-history` / `update-history` / `dump-cross-section` / `accumulate` / `verify` / `write-universe`)
 
 ## Qlib compatibility & low-intrusion design
 
