@@ -4,6 +4,10 @@
 > `../script` 平台仓架构对照）。提需求/排期由仓库所有者在 wmshare 侧执行；
 > 本文件只固化「要什么、为什么客户端造不出来、上游做了解锁什么」。
 > 延续诚实契约：每项写清证据与边界，不把推断写成结论。
+>
+> **请求 1 已立项出方案（2026-11-17）**：[upstream-daily-basic-plan.md](upstream-daily-basic-plan.md)
+> ——存储选型 / 物化 job / 历史回填双对账门 / 读端点 / 定价 / 分期验收，
+> 服务端 4 仓链（winmale/kernel/script/storage/airflow）改动锚点全部落到 文件:行号。
 
 ## 背景一句话
 
