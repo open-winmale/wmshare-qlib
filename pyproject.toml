@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wmshare-qlib"
+version = "0.1.0"
+description = "Qlib-native data layer powered by wmshare (CN/HK precomputed factors)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "BSD-3-Clause" }
+dependencies = [
+    "wmshare>=1.22",
+    "pandas>=2.0",
+    "pyarrow>=14",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+qlib = ["pyqlib>=0.9"]
+test = ["pytest>=7"]
+
+[project.scripts]
+wmshare-qlib = "wmshare_qlib.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+markers = [
+    "qlib: requires the optional pyqlib dependency (child-process read-back)",
+    "live: consumes real wmshare EC/network (opt-in via WMSHARE_QLIB_LIVE=1)",
+]
