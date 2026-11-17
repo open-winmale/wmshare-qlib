@@ -267,17 +267,20 @@ P2 上游 PR / HK / 基准卡 ← 下一步（所有 P0/P1 实现项已落地；
 4. **README"EC transparency"两条旧锚点** —— 已在 README 加确定性公式更正注记
    （2026-11-17）；一次全 bundle re-probe（1 票 × kline+4 估值+moneyflow，
    估 ~7.4k EC）刷新旧锚点数字仍待执行；`snapshot` 大批量（N=300）单价待 probe。
-5. **新增待办（P0-2/P0-1 收尾）**：live 全链路一次真实验证（1 票 n=20 走
-   hfq_factor dump → 次日 update-history 尾巴追加 → verify 读回，
-   估 ~6.3k + ~1.2k EC）——stub 测试已全过，真实链路的 factor≈8.65 读回
-   锚点与尾巴 reconciliation 待落。`batch_live` percent 除权口径待某除权日
-   机会性 probe。
-6. **新增待办（P0-3 收尾）**：`kline.snapshot` N=300 大批量单价 live probe
-   （估 ~30k EC 一次，验证 docstring 的 ~58/票 缩量效应），同时落一次
-   snapshot 截面的真实 score CSV 读回。
-7. **新增待办（P1-1 收尾）**：`indices.members` 单价 live probe（键名枚举
-   `indices.universe_keys` 确认 index.hs300 可用性），一次真实 csi300
-   universe 文件落盘 + D.instruments 读回。
+5. ~~**P0-2/P0-1 live 全链路验证**~~ ✅ **已完成（2026-11-17，见
+   benchmark-card.md）**：真实 dump → 尾巴追加 → 重叠核对 → Tier-2 读回
+   全 PASS；真实 factor 除权跳变（工行 2.5546→2.6001）成立。实测口径：
+   3 票 n=20 全 bundle 仅 9,270 EC（估值锚点对缓存路径偏保守）；
+   服务端 EOD 最后 bar = 上一交易日，**盘中运行 update 会重复付核对成本
+   （~1.2k/票/次）→ EOD 管道应收盘后运行**。`batch_live` percent 除权
+   口径仍待某除权日机会性 probe。
+6. ~~**snapshot 大批量单价**~~ ✅ **已完成**：N=81 实测 **66.2 EC/票**
+   （N=3 时 ~100，向 docstring ~58 靠拢）；~81 票单批会挂 → 已实现客户端
+   分批（SNAPSHOT_BATCH_CHUNK=30）+ 真实 81 票 score CSV 读回（5,364 EC）。
+7. ~~**indices.members probe**~~ ✅ **已完成**：`index.hs300` 服务端实为
+   **100 票口径**（含 19 个非 A 股码被 stocks.list 正确剔除）；
+   全量拉取 12,754 EC（默认 top-20 也要 6,962 EC——probe 应直接带 top_n）；
+   universe 文件机制离线+卫生路径均验证。
 
 ## 六、明确不做（延续 README 红线）
 
