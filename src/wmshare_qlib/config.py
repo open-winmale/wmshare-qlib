@@ -211,5 +211,12 @@ def adjustment_mode(live: bool, requested: str | None = None) -> str:
 
 
 def history_days_threshold() -> int:
-    """Minimum observations before a factor may enter backtest (cold-cache guard)."""
+    """Accumulate's promotion guard default (single source of truth, P2-2 wiring).
+
+    Cold-start guard only: the number of REAL accumulated snapshot days before
+    ``accumulate`` auto-promotes the PIT series to a backtestable panel. The
+    series itself is available from its first captured day - this threshold
+    gates promotion (a sanity minimum against reading signal into a handful of
+    days), never data access.
+    """
     return 60

@@ -381,10 +381,19 @@ def cmd_accumulate(args: argparse.Namespace) -> None:
     result = _fetch_cross_section_by_via(args)
     out = cross_section.accumulate(result.frame, args.out, as_of=args.as_of)
     print("[accumulate]", out)
-    meta = cross_section.history_meta(
-        len(list(Path(args.out).glob("*.parquet"))), args.min_days
-    )
+    files = sorted(Path(args.out).glob("*.parquet"))  # ISO stems sort chronologically
+    available_from = files[0].stem if files else None
+    meta = cross_section.history_meta(len(files), args.min_days, available_from=available_from)
     print("[history-meta]", json.dumps(meta, ensure_ascii=False))
+    # P2-2: automatic promotion check - when the configurable cold-start guard
+    # passes, promote the accumulated snapshots to a backtestable panel here
+    # instead of leaving the operator to remember promote_to_panel exists.
+    if len(files) >= args.min_days:
+        panel_out = Path(args.out).with_name(Path(args.out).name + "_panel.parquet")
+        _frame, status = cross_section.promote_to_panel(
+            args.out, min_days=args.min_days, out_parquet=panel_out
+        )
+        print("[promote]", status)
 
 
 def cmd_write_universe(args: argparse.Namespace) -> None:
@@ -597,7 +606,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="hard EC ceiling, checked post-hoc; REQUIRED for --live")
     a.add_argument("--idx", default=None,
                    help="server index key to shrink the universe (e.g. index.hs300)")
-    a.add_argument("--min-days", type=int, default=60)
+    a.add_argument("--min-days", type=int, default=config.history_days_threshold(),
+                   help="cold-start guard for promotion (configurable): real "
+                        "snapshot days before accumulate auto-promotes to a "
+                        "backtestable panel; the PIT series itself is "
+                        "available from its first captured day regardless")
     a.add_argument("--dry-run", action="store_true",
                    help="print the pre-flight EC estimate and exit")
     a.add_argument("--out", default="out/cs_accum")

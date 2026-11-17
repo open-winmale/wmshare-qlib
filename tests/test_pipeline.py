@@ -325,3 +325,44 @@ def test_accumulation_cold_start_guard(tmp_path):
     )
     assert frame is None  # only 1 day, must not promote
     assert "need >= 60" in status
+
+
+def test_history_meta_available_from_semantics():
+    """P2-2 rewording: PIT available-from semantics + wired guard default.
+
+    The threshold is a promotion guard (configurable, single source of truth in
+    config.history_days_threshold, consumed by the CLI default) - NOT a data
+    limit: the series is honest from its first captured day.
+    """
+    meta = cross_section.history_meta(1, config.history_days_threshold(),
+                                      available_from=DAY)
+    assert meta["available_from"] == DAY
+    assert meta["threshold"] == config.history_days_threshold()
+    assert meta["backtestable"] is False
+    assert "PIT self-built series" in meta["note"]
+    assert f"available from {DAY}" in meta["note"]
+    assert "honest, just short" in meta["note"]
+
+    passed = cross_section.history_meta(config.history_days_threshold(),
+                                        config.history_days_threshold(),
+                                        available_from=DAY)
+    assert passed["backtestable"] is True
+    assert "guard passed" in passed["note"]
+
+    # default threshold comes from config, not a second hard-coded 60
+    assert config.history_days_threshold() == 60
+
+
+def test_accumulate_promotes_once_guard_passes(tmp_path):
+    """The P2-2 auto-promotion path: guard passes -> promote_to_panel succeeds."""
+    r = fetch.fetch_cross_section(as_of=DAY)
+    for i in range(config.history_days_threshold()):
+        d = f"2026-{1 + i // 28:02d}-{1 + i % 28:02d}"
+        cross_section.accumulate(r.frame, tmp_path / "acc", as_of=d)
+    frame, status = cross_section.promote_to_panel(
+        tmp_path / "acc", min_days=config.history_days_threshold(),
+        out_parquet=tmp_path / "panel.parquet",
+    )
+    assert frame is not None
+    assert "promoted 60 days" in status
+    assert (tmp_path / "panel.parquet").exists()

@@ -2,7 +2,11 @@
 
 Honesty contract: a single-day cross section has NO history, cannot be trained or
 backtested. We emit it as score/<date>.csv with meta history=false. Accumulated
-snapshots may later be promoted to a backtestable panel once N days are available.
+snapshots form a self-built PIT series: the series is available FROM its first
+captured day and grows one real day at a time (never backfilled). A configurable
+cold-start guard (min_days, default config.history_days_threshold()) gates
+promotion to a backtestable panel — it is a sanity guard, not a data limit: the
+data itself is honest from day one, just short.
 """
 
 from __future__ import annotations
@@ -71,10 +75,28 @@ def promote_to_panel(
     return df, f"promoted {len(files)} days -> {out_parquet}"
 
 
-def history_meta(n_days: int, threshold: int) -> dict:
+def history_meta(n_days: int, threshold: int, *, available_from: str | None = None) -> dict:
+    """PIT self-built series status (available-from semantics).
+
+    ``available_from`` is the earliest captured snapshot date (the parquet file
+    stems are ISO dates, so lexicographic sort = chronological). The guard
+    ``threshold`` is configurable and only gates PROMOTION - the series itself
+    is honest (real captured values) from day one, just short.
+    """
+    promoted = n_days >= threshold
     return {
         "history_days": n_days,
         "threshold": threshold,
-        "backtestable": n_days >= threshold,
-        "note": "below threshold: snapshot only, not backtestable" if n_days < threshold else "ok",
+        "available_from": available_from,
+        "backtestable": promoted,
+        "note": (
+            f"PIT self-built series: available from {available_from or 'n/a'}; "
+            + (
+                f"promotion guard passed ({n_days} days >= {threshold})"
+                if promoted
+                else f"{n_days} real day(s) accumulated; promotion (backtest "
+                     f"panel export) waits for the configurable guard of "
+                     f"{threshold} days - data is honest, just short"
+            )
+        ),
     }

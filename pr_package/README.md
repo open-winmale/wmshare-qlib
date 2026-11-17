@@ -38,7 +38,7 @@
 
 ## 四、提交步骤（由仓库所有者执行，代理无效）
 
-1. 先将 `wmshare-qlib` 公开为可 review 的仓库（当前 404）。
+1. ~~先将 `wmshare-qlib` 公开为可 review 的仓库~~ ✅ 已完成（2026-11-17 创建，见第一节）。
 2. 与上游维护者沟通是否接受外部数据依赖（issue 先行，避免直接 PR 被拒）。
 3. 将 `collector.py` 按 Qlib 目录约定放入 `scripts/data_collector/wmshare/`，
    并补齐 `BaseCollector` 所需的 `instrument_list` / 路径配置等运行时细节（骨架已标注 TODO 语义处）。

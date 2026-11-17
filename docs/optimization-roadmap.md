@@ -200,7 +200,7 @@ README 声明 qfq 已复权所以 factor≡1，自洽但隐藏了一个正确性
 - 形态：`--years N`（内部按 n=250×N 根数取，不碰 begin/end），仅 live，
   发射前打印 `--dry-run` 预算并要求确认。
 
-### P1-3 工程信誉件（性价比最高的"赚 star"项）
+### P1-3 工程信誉件（CI/重试/dry-run 等社区可见性基础件）
 
 > **状态：已实现（2026-11-17，Tier-1 79 passed / Tier-2 80 passed /
 > ruff 清洁）。** CI（`.github/workflows/ci.yml`：py3.10/3.12 矩阵，
@@ -229,8 +229,15 @@ issue 先行问 microsoft/qlib 维护者是否接受第三方数据商依赖
 
 - **HK 支持**：kline 已覆盖港股 5 位码，但适配器只有 sh/sz/bj 映射
   （`config.EXCHANGE_SUFFIX`），README 标题写了 CN/HK —— 补齐映射或改口径，二选一；
-- **score 层 60 天自动晋升**：`accumulate` 里加 promotion 检查提示
-  （`cross_section.py` 已有晋升设计，缺自动检查）；
+- ~~**score 层 60 天自动晋升**~~ ✅ **已实现（2026-11-17）**：`accumulate`
+  追加后自动检查守卫、通过即晋升；`--min-days` 默认接线
+  `config.history_days_threshold()`（消除 CLI 独立硬编码的双事实源）；
+  meta 增 `available_from` 字段，表述从「攒够 N 才能回测」改为
+  **PIT 自建序列：自采集日起可用**（门槛只是晋升守卫，数据从第一天起就是真值）；
+- **两融（margin）进 .bin**：`MarginApi.query` 是个股日频真历史序列
+  （trade_date + 融资 3 列 + 融券 3 列），是层①的天然扩容候选；
+  但 EC 计价未 probe、demo 数据无 margin 键（2026-11-17 核实，live-only）
+  → 实现前需一次 live probe 定价与口径；
 - **基准卡**：csi300 × 2y 跑一次 Alpha158-lite，发布诚实数字 + 总 EC 成本，
   逐步取代"demo 10 票 IC≈0.05"作为对外表述的主锚点。
 
@@ -281,6 +288,12 @@ P2 上游 PR / HK / 基准卡 ← 下一步（所有 P0/P1 实现项已落地；
    **100 票口径**（含 19 个非 A 股码被 stocks.list 正确剔除）；
    全量拉取 12,754 EC（默认 top-20 也要 6,962 EC——probe 应直接带 top_n）；
    universe 文件机制离线+卫生路径均验证。
+8. **wmshare SDK 2.0.0 漂移（新发现，2026-11-17）**：本地 editable 安装的
+   wmshare 主仓已进 2.0.0，`DemoClient._stocks_list/_kline_bars` 删除了
+   `_df` 参数 → 本地 23 个 Tier-1 测试失败（21 stocks.list + 2 kline.bars，
+   同一根因）。CI 钉 `@v1.22.2` 不受影响。**适配器的 2.x 兼容层**
+   （或钉版本声明）是下一个 P0 候选——在 wmshare 2.x 稳定前，
+   本仓所有 demo 路径测试以 CI（v1.22.2）为准。
 
 ## 六、明确不做（延续 README 红线）
 
