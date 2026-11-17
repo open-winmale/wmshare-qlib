@@ -18,7 +18,6 @@ only ever touches this boundary.
 
 from __future__ import annotations
 
-import inspect
 import json
 import subprocess
 import sys
@@ -109,7 +108,10 @@ if errors and any("no rows" not in e for e in errors):
                     f"{'OK' if close(actual, expected) else 'MISMATCH'}"
                 )
             except Exception as exc:
-                details.append(f"{inst}/${field}@{date}: fallback failed: {type(exc).__name__}: {exc}")
+                details.append(
+                    f"{inst}/${field}@{date}: fallback failed: "
+                    f"{type(exc).__name__}: {exc}"
+                )
     except Exception as exc:
         details.append(f"FileFeatureStorage backend unavailable: {type(exc).__name__}: {exc}")
         backend = None

@@ -83,6 +83,33 @@ def test_panel_integrity_catches_absurd_magnitude():
     assert any("outside" in i and "pe" in i for i in integ["issues"]), integ["issues"]
 
 
+# --- P0-2' regressions: factor emission and the factor monotonic gate ---------
+def test_demo_factor_is_explicit_constant_one():
+    """Demo (qfq_const, forced) must still emit factor=1.0 explicitly - the
+    convention is DECLARED, never silently omitted."""
+    r = fetch.fetch_history_panel(SYMBOLS, n=30)
+    f = r.frame[r.frame["field"] == "factor"]
+    assert len(f) > 0, "demo panel missing the declared factor field"
+    assert (f["value"] == 1.0).all()
+
+
+def test_panel_integrity_catches_decreasing_factor():
+    """The dump-time backstop: factor decreasing along dates (mixed-convention
+    fragments, upstream inconsistency) must fail integrity. The manifest param
+    guard refuses the mix at resume time; this catches anything that slips past.
+    """
+    r = fetch.fetch_history_panel(SYMBOLS, n=30)
+    bad = r.frame.copy()
+    fac = bad[bad["field"] == "factor"]
+    inst = fac["instrument"].iloc[0]
+    sub = fac[fac["instrument"] == inst].sort_values("date")
+    oldest_idx = sub.index[0]
+    bad.loc[oldest_idx, "value"] = 5.0  # oldest 5.0 -> later 1.0: DECREASE
+    integ = panel.assert_panel_integrity(bad)
+    assert not integ["ok"]
+    assert any(inst in i and "factor DECREASES" in i for i in integ["issues"]), integ["issues"]
+
+
 # --- EC budget gate: live cross-section requires an explicit budget -----------
 def test_live_cross_section_requires_explicit_max_ec():
     """screener.query bills column MATERIALIZATION in one request (light

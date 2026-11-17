@@ -40,8 +40,13 @@ SERIES_EXPECTED_ORDER: dict[str, str] = {
 }
 
 # Exchange suffix mapping (wmshare bare code -> Qlib instrument).
-# Values verified from demo_client().stocks.list(): 'sh' / 'sz' / 'bj'.
-EXCHANGE_SUFFIX: dict[str, str] = {"sh": "SH", "sz": "SZ", "bj": "BJ"}
+# sh/sz/bj verified from demo_client().stocks.list(); 'hk' is the DECLARED
+# adapter convention (kline docstring covers HK 5-digit codes) - mapping-ready
+# but NOT end-to-end validated (no HK source verified in the demo snapshot;
+# prices are HKD, see FIELD_UNITS caveat). Never infer suffixes from digit
+# ranges - HK codes are 4/5 digits and collide with nothing here, but the
+# mapping stays explicit.
+EXCHANGE_SUFFIX: dict[str, str] = {"sh": "SH", "sz": "SZ", "bj": "BJ", "hk": "HK"}
 
 
 @dataclass(frozen=True)
@@ -71,12 +76,64 @@ CROSS_SECTION_METRICS: tuple[MetricCode, ...] = (
     MetricCode("$BONUS_RATE_3Y_AVG_LAST", "Dividend yield 3y average", "ratio", "higher_better"),
 )
 
+# Snapshot-batch score fields (P0-3): columns of the kline.snapshot batch
+# (field names verified against the SDK's _SNAPSHOT_BATCH_FIELDS mapping).
+# This is a TECHNICAL COMPOSITE (momentum / size tilt), a different score
+# family from the screener fundamentals above - always labeled as such in
+# the score meta, never mixed into one composite. Directions are a DECLARED
+# research choice, not upstream truth.
+# Cost anchor (probe 2026-11-17): ~100 EC/票 at N=3 (docstring: ~58/票 at
+# large batches); 23 fields ≈ 2.5-4.3 EC/field - cheaper per column than the
+# screener light columns (~9 EC/row/column) and the ONLY client-side-subset
+# path (screener --idx is not served by the server).
+SNAPSHOT_METRICS: tuple[MetricCode, ...] = (
+    MetricCode("chg_20d", "20-day price momentum (decimal)", "ratio", "higher_better"),
+    MetricCode("roi_1y", "1-year return (decimal)", "ratio", "higher_better"),
+    MetricCode("ma60_up", "close above MA60 (0/1 trend flag)", "flag", "higher_better"),
+    MetricCode("mv", "total market value in CNY (small-cap tilt)", "CNY", "lower_better"),
+)
+
 # screener.query `where` MUST reference at least one metric code (server
 # contract: "where 里没有 $指标码" rejects '1=1'). We anchor on per-stock
 # PB > 0 (positive book value): the least biased filter - PE > 0 would
 # silently drop loss-makers from the cross-section. $PB_TTM_LAST is the
 # per-stock code; the $ID_ family would be NaN here (see above).
 CROSS_SECTION_WHERE: str = "$PB_TTM_LAST > 0"
+
+
+# --- EC pricing anchors (deterministic model, live-probed 2026-11-17) --------
+# Single source of truth for the --dry-run pre-flight estimator (estimate.py).
+# Formulas fitted exactly on three probes (roadmap §2.5); they are ESTIMATES -
+# server-side pricing can change, so --max-ec stays the binding pre-flight
+# declaration. Re-probe quarterly (roadmap §5.3).
+EC_KLINE_BASE = 156.0            # per call
+EC_KLINE_PER_BAR = 67.0          # per SERVED bar (range queries serve max_limit!)
+EC_MONEYFLOW_BASE = 156.0        # per call
+EC_MONEYFLOW_PER_BAR = 16.0      # per bar
+EC_VALUATION_PER_METRIC = 712.0  # hist_stats 3y window, per metric (pe/pb/ps/pr)
+EC_SNAPSHOT_PER_TICKET = 100.0   # kline.snapshot batch, N=3 measured (~58 at scale)
+EC_STOCKS_LIST = 66.0            # whole universe, one call
+EC_SCREENER_FULL_UNIVERSE = 204430.0  # measured: full market x 4 light columns
+
+# Operational cap measured live (2026-11-17): a single kline.snapshot batch
+# over ~81 tickets failed (server-side eval/timeout), while <=30-ticket
+# chunks succeed deterministically (~66 EC/票 at that scale). Snapshot-batch
+# callers chunk client-side; EC is the sum of chunk bills.
+SNAPSHOT_BATCH_CHUNK = 30
+
+# Deep history (P1-2): n-bars path only (range queries force-pay max_limit
+# bars - falsified probe). The SDK caps one call at 10000 served bars, which
+# covers A-share history back to 1991 (~8500 trading days). Pricing beyond
+# 500 served bars is EXTRAPOLATED (linear) - probe pending (roadmap §5).
+TRADING_DAYS_PER_YEAR = 250
+KLINE_MAX_SERVED_BARS = 10000
+
+
+def years_to_n(years: float) -> int:
+    """Deep-history years -> bars per symbol (250 trading days/year)."""
+    if years <= 0:
+        raise ValueError(f"--years must be positive, got {years}")
+    return min(int(round(years * TRADING_DAYS_PER_YEAR)), KLINE_MAX_SERVED_BARS)
 
 
 def unit_value_range(unit: str) -> tuple[float, float]:
@@ -99,12 +156,58 @@ def unit_value_range(unit: str) -> tuple[float, float]:
 
 
 def qfq_factor_mode() -> str:
-    """Which factor convention we use in v1.
+    """DEPRECATED alias kept for one release; use adjustment_mode().
 
-    'qfq_const' = prices are already front-adjusted (qfq), so factor=1 for every
-    date. This avoids the most common Qlib/broker mismatch (double adjustment).
+    Historically v1 used qfq everywhere (factor=1). Live now defaults to
+    'hfq_factor' (see adjustment_mode); only the demo snapshot stays qfq_const.
     """
     return "qfq_const"
+
+
+# --- price adjustment conventions --------------------------------------------
+# Two supported conventions (single source of truth; fetch/panel/cli read this):
+#
+# 'hfq_factor' (LIVE default):
+#   prices stored in open/high/low/close are BACK-adjusted (hfq) values served
+#   directly by wmshare; factor = hfq/raw per date. hfq is anchored at the IPO,
+#   so PAST values never change when a new corporate action occurs -> fragments
+#   stay valid and daily bars append cleanly (incremental-safe).
+#   Qlib convention verified against microsoft/qlib
+#   scripts/data_collector/yahoo/collector.py (YahooNormalize1d.adjusted_price,
+#   read 2026-11-17): factor = adjusted/raw, prices stored ARE adjusted,
+#   raw = close / factor, volume_adj = raw / factor.
+#   Probe 2026-11-17 (600519, n=10): raw vs hfq dates align 1:1,
+#   factor=8.6463 monotonic; upstream volume is NOT adjusted -> we divide by
+#   factor here to keep close*volume == amount invariant across ex-div dates.
+#   Live kline cost doubles (one adj call + one raw call, same EC formula).
+#
+# 'qfq_const' (DEMO, forced):
+#   the demo snapshot supports neither adj= nor date ranges (UsageError,
+#   probe 2026-11-17); prices are qfq with factor=1.0 emitted explicitly.
+#   Caveat stays documented: qfq re-anchors at every corporate action, so
+#   demo fragments fetched across an ex-div event are mutually inconsistent.
+ADJUSTMENT_MODES: tuple[str, ...] = ("hfq_factor", "qfq_const")
+
+
+def adjustment_mode(live: bool, requested: str | None = None) -> str:
+    """Resolve the effective adjustment mode (single resolution point).
+
+    ``requested=None`` -> auto: 'hfq_factor' live, 'qfq_const' demo.
+    An explicit request is validated; demo CANNOT use 'hfq_factor' (upstream
+    UsageError) - raise loud instead of silently degrading.
+    """
+    auto = "hfq_factor" if live else "qfq_const"
+    mode = requested or auto
+    if mode not in ADJUSTMENT_MODES:
+        raise ValueError(
+            f"unknown adjustment mode {mode!r}; expected one of {list(ADJUSTMENT_MODES)}"
+        )
+    if not live and mode != "qfq_const":
+        raise ValueError(
+            "demo snapshot supports only 'qfq_const' (no adj= support upstream); "
+            "hfq_factor requires --live"
+        )
+    return mode
 
 
 def history_days_threshold() -> int:

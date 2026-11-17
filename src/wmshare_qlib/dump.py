@@ -88,3 +88,60 @@ def dump_panel(panel: pd.DataFrame, qlib_dir: str | Path, *, freq: str = "day") 
 
     manifest["fields"] = fields_stat
     return manifest
+
+
+def instrument_date_ranges(
+    qlib_dir: str | Path, *, freq: str = "day", field: str = "close"
+) -> dict[str, tuple[str, str]]:
+    """Per-instrument data coverage [start, end] read from the .bin headers.
+
+    P1-1: universe files must carry Qlib-convention membership ranges. The
+    honest range is what the dump actually CONTAINS (start_index + length vs
+    the global calendar) - not the full calendar, which would pretend
+    suspended/late-listed instruments traded on days they did not.
+    Instruments lacking the anchor field's .bin are skipped (reported by the
+    caller), never fabricated.
+    """
+    import numpy as np
+
+    calendar = format.read_calendar(qlib_dir, freq=freq)
+    features = Path(qlib_dir) / "features"
+    if not calendar or not features.exists():
+        return {}
+    out: dict[str, tuple[str, str]] = {}
+    for inst_dir in sorted(p for p in features.iterdir() if p.is_dir()):
+        bin_file = inst_dir / f"{field}.{freq}.bin"
+        if not bin_file.exists():
+            continue
+        arr = np.fromfile(bin_file, dtype="<f4")
+        if arr.size < 2:
+            continue
+        start_index = int(arr[0])
+        length = arr.size - 1
+        end_index = min(start_index + length - 1, len(calendar) - 1)
+        if not (0 <= start_index < len(calendar)) or start_index > end_index:
+            continue
+        out[inst_dir.name.upper()] = (calendar[start_index], calendar[end_index])
+    return out
+
+
+def write_universe_file(
+    qlib_dir: str | Path,
+    name: str,
+    ranges: dict[str, tuple[str, str]],
+) -> Path:
+    """Write ``instruments/<name>.txt`` (Qlib convention: INST\\tstart\\tend).
+
+    ``D.instruments("<name>")`` then works directly. Rows are sorted for
+    deterministic diffs; the name is validated (no path tricks).
+    """
+    import re
+
+    if not re.fullmatch(r"[A-Za-z0-9_\-]+", name):
+        raise ValueError(f"universe name {name!r} must be [A-Za-z0-9_-]+")
+    inst_dir = Path(qlib_dir) / "instruments"
+    inst_dir.mkdir(parents=True, exist_ok=True)
+    out = inst_dir / f"{name}.txt"
+    lines = [f"{inst}\t{start}\t{end}" for inst, (start, end) in sorted(ranges.items())]
+    out.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    return out

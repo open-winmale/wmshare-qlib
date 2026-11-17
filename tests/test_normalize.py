@@ -6,9 +6,9 @@ import datetime as dt
 
 import pandas as pd
 import pytest
-
-from wmshare_qlib import normalize
 import wmshare
+
+from wmshare_qlib import config, normalize
 
 
 @pytest.fixture(scope="module")
@@ -93,3 +93,81 @@ def test_valuation_demo_dates_match_kline_dates(client):
         f"valuation date {newest_val_date} != kline date {newest_kline_date} "
         f"(timezone offset in epoch->date conversion)"
     )
+
+
+# --- P0-2': merge_adjusted_klines (hfq + raw -> factor) -----------------------
+def _kframe(dates_desc, close, *, volume=None):
+    """Ascending kline frame shaped like kline_to_frame output (dates given desc)."""
+    dates_asc = list(reversed(dates_desc))
+    n = len(dates_asc)
+    return pd.DataFrame({
+        "date": dates_asc,
+        "symbol": "600519",
+        "open": [c - 0.5 for c in close],
+        "high": [c + 0.5 for c in close],
+        "low": [c - 1.0 for c in close],
+        "close": list(close),
+        "volume": list(volume) if volume else [100.0] * n,
+        "amount": [1050.0] * n,
+    })
+
+
+def test_merge_adjusted_klines_computes_factor_and_scales_volume():
+    raw = _kframe(["2026-01-03", "2026-01-02", "2026-01-01"],
+                  [10.0, 11.0, 12.0], volume=[300.0, 200.0, 100.0])
+    adj = raw.copy()
+    adj[["open", "high", "low", "close"]] = adj[["open", "high", "low", "close"]] * 2.0
+    merged = normalize.merge_adjusted_klines(adj, raw, symbol="600519")
+    assert len(merged) == 3
+    assert ((merged["factor"] - 2.0).abs() < 1e-12).all()
+    # stored close IS the adjusted price; raw = close / factor
+    assert ((merged["close"] / merged["factor"] - raw["close"].values).abs() < 1e-12).all()
+    # upstream volume is unadjusted -> adapter divides by factor
+    assert ((merged["volume"] - raw["volume"].values / 2.0).abs() < 1e-9).all()
+
+
+def test_merge_adjusted_klines_keeps_factor_jump_at_exdiv():
+    """A factor jump UP (ex-div) is legal; only decreases raise."""
+    raw = _kframe(["2026-01-03", "2026-01-02", "2026-01-01"], [10.0, 11.0, 12.0])
+    factors = [1.5, 2.0, 2.0]  # ascending dates: oldest 1.5 -> newest 2.0 (jump up)
+    adj = raw.copy()
+    adj[["open", "high", "low", "close"]] = adj[["open", "high", "low", "close"]].mul(
+        pd.Series(factors, index=adj.index), axis=0
+    )
+    merged = normalize.merge_adjusted_klines(adj, raw, symbol="600519")
+    assert ((merged["factor"] - factors).abs() < 1e-12).all()
+
+
+def test_merge_adjusted_klines_rejects_misaligned_dates():
+    raw = _kframe(["2026-01-03", "2026-01-02", "2026-01-01"], [10.0, 11.0, 12.0])
+    adj = _kframe(["2026-01-03", "2026-01-02", "2025-12-31"], [20.0, 22.0, 24.0])
+    with pytest.raises(normalize.NormalizeError, match="date sets differ"):
+        normalize.merge_adjusted_klines(adj, raw, symbol="600519")
+
+
+def test_merge_adjusted_klines_rejects_nonpositive_raw_close():
+    raw = _kframe(["2026-01-02", "2026-01-01"], [10.0, 0.0])
+    adj = raw.copy()
+    adj[["open", "high", "low", "close"]] = adj[["open", "high", "low", "close"]] * 2.0
+    with pytest.raises(normalize.NormalizeError, match="non-positive"):
+        normalize.merge_adjusted_klines(adj, raw, symbol="600519")
+
+
+def test_merge_adjusted_klines_rejects_decreasing_factor():
+    raw = _kframe(["2026-01-03", "2026-01-02", "2026-01-01"], [10.0, 11.0, 12.0])
+    factors = [2.0, 2.0, 1.5]  # ascending dates: oldest 2.0 -> newest 1.5 DECREASES
+    adj = raw.copy()
+    adj[["open", "high", "low", "close"]] = adj[["open", "high", "low", "close"]].mul(
+        pd.Series(factors, index=adj.index), axis=0
+    )
+    with pytest.raises(normalize.NormalizeError, match="factor decreases"):
+        normalize.merge_adjusted_klines(adj, raw, symbol="600519")
+
+
+def test_hk_suffix_mapping_declared():
+    """P2 HK: 'hk' -> 'HK' is the declared convention (mapping-ready, not
+    E2E validated - no HK source in the demo snapshot). The panel integrity
+    pattern must accept HK instruments so an HK panel never false-fails."""
+    assert config.EXCHANGE_SUFFIX["hk"] == "HK"
+    inst = f"{config.EXCHANGE_SUFFIX['hk']}00700"
+    assert inst[:2] == "HK" and inst[2:].isdigit()

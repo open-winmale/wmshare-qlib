@@ -7,7 +7,7 @@ raises or annotates explicitly - we never silently fill 0 or guess direction.
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any, Iterable
+from typing import Any
 
 import pandas as pd
 
@@ -179,6 +179,74 @@ def moneyflow_to_frame(payload: Any, *, symbol: str) -> pd.DataFrame:
     assert_series_order(df["date"], "desc", f"moneyflow.bars[{symbol}]")
     df["symbol"] = symbol
     return ascending_frame(df, label=f"moneyflow.bars[{symbol}]")
+
+
+def merge_adjusted_klines(
+    adj_df: pd.DataFrame, raw_df: pd.DataFrame, *, symbol: str
+) -> pd.DataFrame:
+    """Merge a back-adjusted (hfq) kline frame with its raw twin -> factor column.
+
+    Qlib convention (verified against microsoft/qlib
+    scripts/data_collector/yahoo/collector.py, YahooNormalize1d.adjusted_price,
+    2026-11-17): ``factor = adjusted / raw``, the stored price fields ARE the
+    adjusted values, ``raw = close / factor`` and ``volume_adj = raw / factor``.
+
+    Probe 2026-11-17 (600519 n=10): raw and hfq bars share identical date sets;
+    upstream volume is NOT adjusted (raw volume == hfq volume), so volume is
+    divided by ``factor`` here - that keeps ``close * volume == amount``
+    invariant across ex-dividend dates. ``amount`` stays raw turnover.
+
+    Guards (fail loud, never fill):
+    - both frames must be non-empty and cover the SAME date set (a partial
+      mismatch means the two calls straddled an upstream update -> raise, the
+      caller retries the symbol as a whole);
+    - raw close must be finite and > 0 (a non-positive raw price cannot yield
+      a factor);
+    - factor must be non-decreasing along dates (hfq is IPO-anchored cumulative;
+      a downward move is upstream inconsistency). The dump-time bulk backstop
+      lives in panel.assert_panel_integrity.
+    """
+    if adj_df.empty or raw_df.empty:
+        raise NormalizeError(f"kline[{symbol}]: adjusted/raw frame is empty")
+    adj_dates = set(adj_df["date"])
+    raw_dates = set(raw_df["date"])
+    if adj_dates != raw_dates:
+        only_adj = sorted(adj_dates - raw_dates)[:3]
+        only_raw = sorted(raw_dates - adj_dates)[:3]
+        raise NormalizeError(
+            f"kline[{symbol}]: adjusted/raw date sets differ "
+            f"(adj-only={only_adj}, raw-only={only_raw}); the two calls "
+            f"straddled an upstream update - refetch the symbol whole"
+        )
+    merged = adj_df.merge(
+        raw_df[["date", "close"]].rename(columns={"close": "_close_raw"}),
+        on="date", how="inner", validate="one_to_one",
+    )
+    if len(merged) != len(adj_df):
+        raise NormalizeError(
+            f"kline[{symbol}]: adjusted/raw merge shrank {len(adj_df)} -> {len(merged)} rows"
+        )
+    raw_close = pd.to_numeric(merged["_close_raw"], errors="coerce")
+    bad = (~raw_close.notna()) | (raw_close <= 0)
+    if bad.any():
+        d = merged.loc[bad, "date"].iloc[0]
+        raise NormalizeError(
+            f"kline[{symbol}]: non-positive/non-numeric raw close on {d} "
+            f"(value={merged.loc[bad, '_close_raw'].iloc[0]}); factor undefined"
+        )
+    merged["factor"] = merged["close"].astype(float) / raw_close.astype(float)
+    if "volume" in merged.columns:
+        merged["volume"] = merged["volume"].astype(float) / merged["factor"]
+    decreasing = merged["factor"].diff().dropna()
+    bad_series = decreasing[decreasing < -1e-9]
+    if not bad_series.empty:
+        pos = merged.index.get_loc(bad_series.index[0])
+        raise NormalizeError(
+            f"kline[{symbol}]: factor decreases at {merged['date'].iloc[pos]} "
+            f"({merged['factor'].iloc[pos - 1]:.6g} -> {merged['factor'].iloc[pos]:.6g}); "
+            f"hfq factor is cumulative and can only jump up at ex-div dates"
+        )
+    return merged.drop(columns=["_close_raw"])
 
 
 def guard_unit(field: str, value: float) -> float:

@@ -1,0 +1,38 @@
+# P1-3 CI: Tier-1 tests only (zero Qlib, zero credentials, zero EC).
+# Tier-2 (pyqlib read-back) stays a local optional cross-check: the vendored
+# .qlibvendor is a local convenience and the pyqlib wheel is not a runtime dep.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # wmshare itself lives in its own public repo (not on PyPI yet)
+      - name: Install wmshare (upstream repo)
+        run: pip install "wmshare @ git+https://github.com/open-winmale/wmshare.git"
+
+      - name: Install package + test deps
+        run: pip install -e '.[test]'
+
+      - name: Lint (ruff)
+        uses: astral-sh/ruff-action@v3
+        with:
+          version: "0.14.4"
+
+      - name: Tier-1 tests (no Qlib, no live/EC)
+        run: PYTHONPATH=src python -m pytest tests -q -m "not live"

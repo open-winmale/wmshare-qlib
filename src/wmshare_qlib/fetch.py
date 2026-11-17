@@ -16,12 +16,80 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as dt
+import random
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
 import pandas as pd
 
 from . import config, normalize
+
+_sleep = time.sleep  # module-level so tests can inject the clock
+
+# P1-3 retry policy: per-symbol HISTORY calls get one bounded retry on
+# TRANSIENT failures. Transient = TransportError (network/timeout),
+# ServerError (5xx), or a rate-limit LimitError (status 429, honoring
+# retry_after). NEVER retried: QuotaError (exhausted quota - retrying is
+# pointless; it subclasses LimitError so must be excluded explicitly),
+# AuthError / UsageError / ApiError / DataError (permanent), and client-side
+# LimitError (code="limit"/"range" - our own parameter mistakes).
+# The big one-shot queries (screener.query, kline.snapshot, batch_live) are
+# deliberately OUT of scope: a timeout mid-materialization must not
+# double-bill - the --max-ec ceiling is their only guard.
+RETRY_ATTEMPTS = 2
+RETRY_BASE_DELAY = 0.5
+
+
+def _is_transient(exc: Exception) -> bool:
+    try:
+        from wmshare import errors as _werr
+    except ImportError:
+        return False  # SDK absent: nothing is retryable
+    if isinstance(exc, _werr.QuotaError):
+        return False
+    if isinstance(exc, (_werr.TransportError, _werr.ServerError)):
+        return True
+    if isinstance(exc, _werr.LimitError) and getattr(exc, "status", None) == 429:
+        return True
+    return False
+
+
+def call_with_retry(
+    fn: Callable[[], Any],
+    *,
+    label: str,
+    meter_cb: Callable[[], None],
+    warn_cb: Callable[[str], None],
+    attempts: int = RETRY_ATTEMPTS,
+) -> Any:
+    """One SDK call with per-attempt metering and a bounded transient retry.
+
+    EC transparency: ``meter_cb`` fires after EVERY attempt - a failed attempt
+    may still have billed, and pretending otherwise is exactly the class of
+    silent loss the roadmap forbids. Retries are surfaced as warnings, never
+    silent. ``attempts`` counts logical calls; the caller's ``requests``
+    counter stays per logical call (EC is the billing unit, not requests).
+    """
+    for i in range(max(1, attempts)):
+        try:
+            result = fn()
+            meter_cb()
+            return result
+        except Exception as exc:
+            meter_cb()
+            if i + 1 >= max(1, attempts) or not _is_transient(exc):
+                raise
+            delay = RETRY_BASE_DELAY * (2 ** i)
+            ra = getattr(exc, "retry_after", None)
+            if ra:
+                delay = max(delay, float(ra))
+            warn_cb(
+                f"{label}: transient {type(exc).__name__} "
+                f"(attempt {i + 1}/{attempts}), retrying in {delay:.2f}s"
+            )
+            _sleep(delay + random.uniform(0.0, 0.25))
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 @dataclass
@@ -62,81 +130,35 @@ def _client(live: bool, max_limit: int | None = None, timeout: float | None = No
     return wmshare.demo_client()
 
 
-def _fetch_one_symbol(
-    c: Any,
-    symbol: str,
-    instrument: str,
-    fields: tuple[str, ...],
-    n: int,
-    live: bool,
-) -> tuple[list[pd.DataFrame], int, float | None, list[str]]:
-    """Fetch ALL history fields for one symbol via one dedicated client.
+def _valuation_frames(
+    c: Any, symbol: str, instrument: str, fields: tuple[str, ...], meter_cb: Callable[[], None]
+) -> tuple[list[pd.DataFrame], list[str], int]:
+    """Fetch the pe/pb/ps/pr 3y series (shared by bulk and tail paths).
 
-    Returns ``(frames, requests, ec_cost, warnings)``. ``ec_cost`` is None in
-    demo (no ``last_ec_cost`` attribute) and the SUM of per-call EC in live.
-    Owning the client per call keeps ``last_ec_cost`` free of write races when
-    the caller runs several symbols concurrently.
+    Returns ``(frames, warnings, requests_used)``. Demo snapshot only stores
+    pe/3y; unsupported metrics are skipped with an explicit warning (cold-cache
+    guard: never fabricate, never fill 0). EC metering goes through the
+    caller's ``meter_cb`` so per-path accounting stays exact.
     """
     frames: list[pd.DataFrame] = []
     warnings: list[str] = []
     requests = 0
-    ec_total = 0.0
-    has_meter = False
-
-    def _meter() -> None:
-        nonlocal ec_total, has_meter
-        last = getattr(c, "last_ec_cost", None)
-        if last is not None:
-            ec_total += float(last)
-            has_meter = True
-
-    # --- kline (OHLCV + amount) ---
-    if live:
-        kraw = c.kline.bars(symbol, n=n, adj="qfq", _df=True)
-    else:
-        # demo supports n<=120, no adj, no begin/end
-        kraw = c.kline.bars(symbol, n=min(n, 120), _df=True)
-    requests += 1
-    _meter()
-    n_raw = len(kraw)
-    kdf = normalize.kline_to_frame(kraw, symbol=symbol)
-    if len(kdf) < n_raw:
-        warnings.append(
-            f"{symbol}/kline: upstream returned {n_raw - len(kdf)} duplicated "
-            f"date row(s) with identical values; deduplicated "
-            f"(conflicting duplicates would have raised)"
-        )
-    kdf["instrument"] = instrument
-    # wmshare returns qfq-adjusted prices directly (no factor column).
-    # Qlib requires `factor` as a standard field; under our declared
-    # qfq_const convention the adjustment factor is 1 for every date.
-    # Emit it explicitly (never silently omit a declared field).
-    if config.qfq_factor_mode() == "qfq_const" and "factor" not in kdf.columns:
-        kdf["factor"] = 1.0
-    keep = [c0 for c0 in ("date", "symbol", "instrument", *config.BASE_FIELDS) if c0 in kdf.columns]
-    frames.append(kdf[keep].melt(
-        id_vars=["date", "symbol", "instrument"], var_name="field", value_name="value"
-    ))
-
-    # --- valuation (pe/pb/ps/pr) ---
     for vfield in config.VALUATION_FIELDS:
         if vfield not in fields:
             continue
-        # demo snapshot only stores pe/3y; other metrics raise UsageError.
-        # Skip unsupported metrics with an explicit warning (cold-cache guard:
-        # never fabricate, never fill 0). Live supports all four.
         try:
-            payload = c.valuation.hist_stats(symbol, metric=vfield, window="3y")
+            payload = call_with_retry(
+                lambda vf=vfield: c.valuation.hist_stats(symbol, metric=vf, window="3y"),
+                label=f"{symbol}/{vfield}", meter_cb=meter_cb, warn_cb=warnings.append,
+            )
         except Exception as exc:  # wmshare.errors.UsageError and friends
             requests += 1
-            _meter()
             warnings.append(
                 f"{symbol}/{vfield}: skipped ({type(exc).__name__}: "
                 f"{str(exc)[:60]})"
             )
             continue
         requests += 1
-        _meter()
         if normalize.annotate_missing(payload):
             warnings.append(f"{symbol}/{vfield}: ok=False skipped (cold cache)")
             continue
@@ -154,21 +176,126 @@ def _fetch_one_symbol(
         vdf["instrument"] = instrument
         vdf["field"] = vfield
         frames.append(vdf[["date", "symbol", "instrument", "field", "value"]])
+    return frames, warnings, requests
+
+
+def _fetch_one_symbol(
+    c: Any,
+    symbol: str,
+    instrument: str,
+    fields: tuple[str, ...],
+    n: int,
+    live: bool,
+    adjust_mode: str = "qfq_const",
+) -> tuple[list[pd.DataFrame], int, float | None, list[str]]:
+    """Fetch ALL history fields for one symbol via one dedicated client.
+
+    Returns ``(frames, requests, ec_cost, warnings)``. ``ec_cost`` is None in
+    demo (no ``last_ec_cost`` attribute) and the SUM of per-call EC in live.
+    Owning the client per call keeps ``last_ec_cost`` free of write races when
+    the caller runs several symbols concurrently.
+
+    ``adjust_mode``: 'hfq_factor' (live default) pulls kline TWICE
+    (``adj="hfq"`` + raw) and emits factor = hfq/raw with volume/factor
+    (Qlib yahoo-collector convention, see normalize.merge_adjusted_klines);
+    'qfq_const' keeps the v1 single-call path with factor=1.0. Demo only
+    supports qfq_const (upstream rejects adj=).
+    """
+    frames: list[pd.DataFrame] = []
+    warnings: list[str] = []
+    requests = 0
+    ec_total = 0.0
+    has_meter = False
+
+    def _meter() -> None:
+        nonlocal ec_total, has_meter
+        last = getattr(c, "last_ec_cost", None)
+        if last is not None:
+            ec_total += float(last)
+            has_meter = True
+
+    # --- kline (OHLCV + amount) ---
+    if live and adjust_mode == "hfq_factor":
+        # Dual pull: back-adjusted + raw. Same n, deterministic EC (156+67n
+        # each, measured 2026-11-17). Dates must align 1:1 (probed: they do);
+        # a mismatch raises inside the merge - never merge on a best-effort
+        # subset.
+        kadj = call_with_retry(
+            lambda: c.kline.bars(symbol, n=n, adj="hfq", _df=True),
+            label=f"{symbol}/kline(adj)", meter_cb=_meter, warn_cb=warnings.append,
+        )
+        requests += 1
+        kraw = call_with_retry(
+            lambda: c.kline.bars(symbol, n=n, adj=None, _df=True),
+            label=f"{symbol}/kline(raw)", meter_cb=_meter, warn_cb=warnings.append,
+        )
+        requests += 1
+        n_adj_raw, n_raw = len(kadj), len(kraw)
+        adj_df = normalize.kline_to_frame(kadj, symbol=symbol)
+        raw_df = normalize.kline_to_frame(kraw, symbol=symbol)
+        kdf = normalize.merge_adjusted_klines(adj_df, raw_df, symbol=symbol)
+        dropped = (n_adj_raw - len(adj_df)) + (n_raw - len(raw_df))
+        if dropped:
+            warnings.append(
+                f"{symbol}/kline: upstream returned {dropped} duplicated "
+                f"date row(s) with identical values; deduplicated "
+                f"(conflicting duplicates would have raised)"
+            )
+    else:
+        if live:
+            # Explicit qfq_const on live: single pull, factor=1.0 (v1 behaviour).
+            kraw = call_with_retry(
+                lambda: c.kline.bars(symbol, n=n, adj="qfq", _df=True),
+                label=f"{symbol}/kline(qfq)", meter_cb=_meter, warn_cb=warnings.append,
+            )
+        else:
+            # demo supports n<=120, no adj, no begin/end
+            kraw = call_with_retry(
+                lambda: c.kline.bars(symbol, n=min(n, 120), _df=True),
+                label=f"{symbol}/kline(demo)", meter_cb=_meter, warn_cb=warnings.append,
+            )
+        requests += 1
+        n_raw = len(kraw)
+        kdf = normalize.kline_to_frame(kraw, symbol=symbol)
+        if len(kdf) < n_raw:
+            warnings.append(
+                f"{symbol}/kline: upstream returned {n_raw - len(kdf)} duplicated "
+                f"date row(s) with identical values; deduplicated "
+                f"(conflicting duplicates would have raised)"
+            )
+        # factor is emitted explicitly on every path (never silently omitted).
+        # qfq_const: prices are qfq, the declared convention says factor=1.0.
+        if "factor" not in kdf.columns:
+            kdf["factor"] = 1.0
+    kdf["instrument"] = instrument
+    keep = [c0 for c0 in ("date", "symbol", "instrument", *config.BASE_FIELDS) if c0 in kdf.columns]
+    frames.append(kdf[keep].melt(
+        id_vars=["date", "symbol", "instrument"], var_name="field", value_name="value"
+    ))
+
+    # --- valuation (pe/pb/ps/pr) ---
+    vframes, vwarnings, vrequests = _valuation_frames(
+        c, symbol, instrument, fields, _meter
+    )
+    requests += vrequests
+    warnings.extend(vwarnings)
+    frames.extend(vframes)
 
     # --- moneyflow ---
     if any(f in fields for f in config.MONEYFLOW_FIELDS):
         # demo snapshot keeps at most 30 bars; live has no such cap.
         mf_n = n if live else min(n, 30)
         try:
-            mraw = c.moneyflow.bars(symbol, n=mf_n, _df=True)
+            mraw = call_with_retry(
+                lambda: c.moneyflow.bars(symbol, n=mf_n, _df=True),
+                label=f"{symbol}/moneyflow", meter_cb=_meter, warn_cb=warnings.append,
+            )
         except Exception as exc:
             requests += 1
-            _meter()
             warnings.append(f"{symbol}/moneyflow: skipped ({type(exc).__name__}: {str(exc)[:60]})")
             mraw = None
         if mraw is not None:
             requests += 1
-            _meter()
             n_mf_raw = len(mraw)
             mdf = normalize.moneyflow_to_frame(mraw, symbol=symbol)
             if len(mdf) < n_mf_raw:
@@ -188,6 +315,91 @@ def _fetch_one_symbol(
     return frames, requests, (ec_total if has_meter else None), warnings
 
 
+def _execute_per_symbol(
+    symbols: list[str],
+    *,
+    run_fn: Callable[[str], tuple[str, str, tuple]],
+    absorb_fn: Callable[[str, str, tuple], None],
+    effective_workers: int,
+    max_ec: float | None,
+    meter: Metering,
+    warnings: list[str],
+) -> int | None:
+    """Generic per-symbol executor: serial or pooled, with the EC hard ceiling.
+
+    Shared by fetch_history_panel (bulk) and fetch_history_tail (incremental)
+    so the probe -> upper-bound -> batch-sizing discipline exists exactly once
+    (P0-1 extraction; behaviour preserved verbatim - the panel test matrix is
+    the regression net). ``run_fn(symbol)`` returns ``(symbol, instrument,
+    payload)`` where payload is ``(frames, requests, ec, warnings)``;
+    ``absorb_fn`` books the payload (metering, warnings, caller-side storage).
+
+    Returns ``stopped_at`` (index into symbols) when the ceiling stopped the
+    run early, else None.
+    """
+    batch_size = effective_workers
+    idx = 0
+    stopped_at: int | None = None
+    per_symbol_ub: float | None = None
+
+    def _affordable() -> int:
+        """How many symbols may we still submit before hitting max_ec?"""
+        if max_ec is None:
+            return len(symbols) - idx
+        spent = meter.ec_cost or 0.0
+        left = max_ec - spent
+        if left <= 0:
+            return 0
+        if per_symbol_ub is None or per_symbol_ub <= 0:
+            return 1  # probe: cost unknowable before the first call
+        return max(0, int(left // per_symbol_ub))
+
+    if batch_size == 1:
+        while idx < len(symbols):
+            if _affordable() < 1:
+                stopped_at = idx
+                break
+            symbol, instrument, payload = run_fn(symbols[idx])
+            absorb_fn(symbol, instrument, payload)
+            ec = payload[2]
+            if ec is not None:
+                per_symbol_ub = ec if per_symbol_ub is None else max(per_symbol_ub, ec)
+            idx += 1
+    else:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        with ThreadPoolExecutor(max_workers=batch_size) as pool:
+            while idx < len(symbols):
+                # NOTE: named batch_n, NOT n - ``n`` is the requested rows per
+                # symbol read by the _run closure. Reassigning n here (the
+                # original P0-1 bug) silently shrank every concurrent fetch to
+                # n=batch_size rows while valuation 3y series kept the row
+                # count looking plausible.
+                batch_n = min(batch_size, _affordable())
+                if batch_n < 1:
+                    stopped_at = idx
+                    break
+                batch = symbols[idx:idx + batch_n]
+                futures = {pool.submit(run_fn, s): s for s in batch}
+                for fut in as_completed(futures):
+                    symbol, instrument, payload = fut.result()
+                    absorb_fn(symbol, instrument, payload)
+                    ec = payload[2]
+                    if ec is not None:
+                        per_symbol_ub = ec if per_symbol_ub is None else max(per_symbol_ub, ec)
+                idx += len(batch)
+
+    if stopped_at is not None:
+        remaining = len(symbols) - stopped_at
+        if remaining > 0:
+            warnings.append(
+                f"EC hard ceiling {max_ec}: stopped after {stopped_at} symbol(s) "
+                f"at {meter.ec_cost:.1f} EC; {remaining} symbol(s) not submitted "
+                f"(per-symbol upper bound={per_symbol_ub})"
+            )
+    return stopped_at
+
+
 def fetch_history_panel(
     symbols: Iterable[str],
     *,
@@ -197,6 +409,8 @@ def fetch_history_panel(
     client: Any | None = None,
     max_workers: int = 1,
     max_ec: float | None = None,
+    adjust_mode: str | None = None,
+    max_limit: int | None = None,
     on_symbol: Callable[[str, str, list[pd.DataFrame], float | None], None] | None = None,
 ) -> FetchResult:
     """Fetch per-symbol history and merge into a long panel.
@@ -214,10 +428,25 @@ def fetch_history_panel(
         symbol succeeds, so a caller can persist a resumable fragment before an
         interruption. The callback must be cheap and side-effect-local.
 
+    P0-2' addition:
+      * ``adjust_mode``: None -> auto ('hfq_factor' live / 'qfq_const' demo,
+        see config.adjustment_mode). hfq_factor doubles the kline calls per
+        symbol (adj + raw) so kline EC doubles; the emitted ``factor`` column
+        is the real cumulative adjustment and volume is divided by it.
+
+    P1-2 addition (deep history):
+      * ``max_limit``: raises the client's per-call served-bar cap (default
+        500) so a single call can serve n > 500 bars. n-mode has NO backward
+        paging (every call returns the most recent n bars), so deep history
+        MUST be one call with a raised cap - range queries are falsified
+        (they force-pay max_limit bars regardless of window). Passed to both
+        the main and per-worker clients; ignored when ``client`` is supplied.
+
     Anti-pitfall #5: symbols with cold-cache / short window are skipped and
     listed in warnings, never filled with zeros.
     """
-    c_main = client if client is not None else _client(live)
+    adjust_mode = config.adjustment_mode(live, adjust_mode)
+    c_main = client if client is not None else _client(live, max_limit=max_limit)
     instrument_map = normalize.build_instrument_map(c_main)
     symbols = list(symbols)
     warnings: list[str] = []
@@ -251,19 +480,22 @@ def fetch_history_panel(
 
     meter = Metering(
         mode="live" if live else "demo",
-        note=("live credentialed: EC billed by symbol/compute, surfaced per call"
-              if live else "demo offline snapshot: no EC meter; live bills by symbol/compute"),
+        note=(
+            f"live credentialed: EC billed by symbol/compute, surfaced per call; "
+            f"adjust_mode={adjust_mode}"
+            + (" (kline pulled twice: adj + raw)" if adjust_mode == "hfq_factor" else "")
+            if live
+            else "demo offline snapshot: no EC meter; live bills by symbol/compute"
+        ),
     )
     collected: dict[str, tuple[str, tuple[list[pd.DataFrame], int, float | None, list[str]]]] = {}
-    batch_size = effective_workers
-    idx = 0
-    stopped_at: int | None = None
 
     def _run(symbol: str):
-        wc = c_main if batch_size == 1 else _client(live)
+        wc = (c_main if effective_workers == 1
+              else _client(live, max_limit=max_limit))
         instrument = normalize.to_qlib_instrument(symbol, instrument_map)
         return symbol, instrument, _fetch_one_symbol(
-            wc, symbol, instrument, fields, n, live
+            wc, symbol, instrument, fields, n, live, adjust_mode
         )
 
     def _absorb(symbol: str, instrument: str, payload) -> None:
@@ -278,64 +510,16 @@ def fetch_history_panel(
 
     # Per-symbol EC upper bound: unknown until the first (probe) symbol finishes.
     # Only ever increases, so a later batch can never be under-reserved.
-    per_symbol_ub: float | None = None
-
-    def _affordable() -> int:
-        """How many symbols may we still submit before hitting max_ec?"""
-        if max_ec is None:
-            return len(symbols) - idx
-        spent = meter.ec_cost or 0.0
-        left = max_ec - spent
-        if left <= 0:
-            return 0
-        if per_symbol_ub is None or per_symbol_ub <= 0:
-            return 1  # probe: cost unknowable before the first call
-        return max(0, int(left // per_symbol_ub))
-
-    if batch_size == 1:
-        while idx < len(symbols):
-            if _affordable() < 1:
-                stopped_at = idx
-                break
-            symbol = symbols[idx]
-            _, instrument, payload = _run(symbol)
-            _absorb(symbol, instrument, payload)
-            ec = payload[2]
-            if ec is not None:
-                per_symbol_ub = ec if per_symbol_ub is None else max(per_symbol_ub, ec)
-            idx += 1
-    else:
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        with ThreadPoolExecutor(max_workers=batch_size) as pool:
-            while idx < len(symbols):
-                # NOTE: named batch_n, NOT n - ``n`` is the requested rows per
-                # symbol read by the _run closure. Reassigning n here (the
-                # original P0-1 bug) silently shrank every concurrent fetch to
-                # n=batch_size rows while valuation 3y series kept the row
-                # count looking plausible.
-                batch_n = min(batch_size, _affordable())
-                if batch_n < 1:
-                    stopped_at = idx
-                    break
-                batch = symbols[idx:idx + batch_n]
-                futures = {pool.submit(_run, s): s for s in batch}
-                for fut in as_completed(futures):
-                    symbol, instrument, payload = fut.result()
-                    _absorb(symbol, instrument, payload)
-                    ec = payload[2]
-                    if ec is not None:
-                        per_symbol_ub = ec if per_symbol_ub is None else max(per_symbol_ub, ec)
-                idx += len(batch)
-
-    if stopped_at is not None:
-        remaining = len(symbols) - stopped_at
-        if remaining > 0:
-            warnings.append(
-                f"EC hard ceiling {max_ec}: stopped after {stopped_at} symbol(s) "
-                f"at {meter.ec_cost:.1f} EC; {remaining} symbol(s) not submitted "
-                f"(per-symbol upper bound={per_symbol_ub})"
-            )
+    # (Executor extracted in P0-1 so the tail fetch shares the exact discipline.)
+    _execute_per_symbol(
+        symbols,
+        run_fn=_run,
+        absorb_fn=_absorb,
+        effective_workers=effective_workers,
+        max_ec=max_ec,
+        meter=meter,
+        warnings=warnings,
+    )
 
     frames_all: list[pd.DataFrame] = []
     for symbol in symbols:  # original order -> deterministic concat
@@ -348,6 +532,476 @@ def fetch_history_panel(
     if not panel.empty:
         panel["value"] = panel["value"].astype(float)
     return FetchResult(frame=panel, metering=meter, warnings=list(dict.fromkeys(warnings)))
+
+
+def _fetch_tail_one_symbol(
+    c: Any,
+    symbol: str,
+    instrument: str,
+    k: int,
+    want_valuation: bool,
+    fields: tuple[str, ...],
+) -> tuple[list[pd.DataFrame], int, float | None, list[str]]:
+    """Incremental tail for one symbol (P0-1): dual kline pull + moneyflow,
+    valuation only when its cadence is due.
+
+    The dual pull (adj + raw) is REQUIRED even for the tail:
+    ``kline.batch_live`` serves the raw live price with UNVERIFIED ex-div
+    semantics (its ``percent`` basis on ex-div days cannot be probed on
+    demand), while ``bars(n=k)`` returns hfq AND raw AND the exact factor in
+    one merge. Deterministic pricing: 156 + 67k EC per call (roadmap §2.5);
+    k = gap_days + overlap, so a daily run costs ~1.1k EC/symbol at
+    overlap=5 - still ~6.5x cheaper than the full-bundle re-pull.
+    """
+    frames: list[pd.DataFrame] = []
+    warnings: list[str] = []
+    requests = 0
+    ec_total = 0.0
+    has_meter = False
+
+    def _meter() -> None:
+        nonlocal ec_total, has_meter
+        last = getattr(c, "last_ec_cost", None)
+        if last is not None:
+            ec_total += float(last)
+            has_meter = True
+
+    # --- kline tail (hfq + raw) ---
+    kadj = call_with_retry(
+        lambda: c.kline.bars(symbol, n=k, adj="hfq", _df=True),
+        label=f"{symbol}/kline-tail(adj)", meter_cb=_meter, warn_cb=warnings.append,
+    )
+    requests += 1
+    kraw = call_with_retry(
+        lambda: c.kline.bars(symbol, n=k, adj=None, _df=True),
+        label=f"{symbol}/kline-tail(raw)", meter_cb=_meter, warn_cb=warnings.append,
+    )
+    requests += 1
+    n_adj_raw, n_raw = len(kadj), len(kraw)
+    adj_df = normalize.kline_to_frame(kadj, symbol=symbol)
+    raw_df = normalize.kline_to_frame(kraw, symbol=symbol)
+    kdf = normalize.merge_adjusted_klines(adj_df, raw_df, symbol=symbol)
+    dropped = (n_adj_raw - len(adj_df)) + (n_raw - len(raw_df))
+    if dropped:
+        warnings.append(
+            f"{symbol}/kline-tail: upstream returned {dropped} duplicated "
+            f"date row(s) with identical values; deduplicated"
+        )
+    kdf["instrument"] = instrument
+    keep = [c0 for c0 in ("date", "symbol", "instrument", *config.BASE_FIELDS)
+            if c0 in kdf.columns]
+    frames.append(kdf[keep].melt(
+        id_vars=["date", "symbol", "instrument"], var_name="field", value_name="value"
+    ))
+
+    # --- moneyflow tail ---
+    if any(f in fields for f in config.MONEYFLOW_FIELDS):
+        mraw = call_with_retry(
+            lambda: c.moneyflow.bars(symbol, n=k, _df=True),
+            label=f"{symbol}/moneyflow-tail", meter_cb=_meter, warn_cb=warnings.append,
+        )
+        requests += 1
+        n_mf_raw = len(mraw)
+        mdf = normalize.moneyflow_to_frame(mraw, symbol=symbol)
+        if len(mdf) < n_mf_raw:
+            warnings.append(
+                f"{symbol}/moneyflow-tail: upstream returned {n_mf_raw - len(mdf)} "
+                f"duplicated date row(s) with identical values; deduplicated"
+            )
+        mdf["instrument"] = instrument
+        mf_keep = [c0 for c0 in ("date", "symbol", "instrument", *config.MONEYFLOW_FIELDS)
+                   if c0 in mdf.columns]
+        frames.append(mdf[mf_keep].melt(
+            id_vars=["date", "symbol", "instrument"], var_name="field", value_name="value"
+        ))
+
+    # --- valuation (cadence-gated: the 3y window re-pulls the whole series,
+    # which the bulk/tail reconciliation then verifies row-by-row) ---
+    if want_valuation:
+        vframes, vwarnings, vrequests = _valuation_frames(
+            c, symbol, instrument, fields, _meter
+        )
+        requests += vrequests
+        warnings.extend(vwarnings)
+        frames.extend(vframes)
+
+    return frames, requests, (ec_total if has_meter else None), warnings
+
+
+def fetch_history_tail(
+    symbols: Iterable[str],
+    *,
+    last_dates: dict[str, str | None],
+    valuation_last_dates: dict[str, str | None] | None = None,
+    live: bool = True,
+    today: str | None = None,
+    overlap: int = 5,
+    tail_max_n: int = 30,
+    valuation_days: int = 7,
+    fields: tuple[str, ...] = config.HISTORY_FIELDS,
+    client: Any | None = None,
+    max_workers: int = 1,
+    max_ec: float | None = None,
+    on_symbol: Callable[[str, str, list[pd.DataFrame], float | None], None] | None = None,
+) -> FetchResult:
+    """Fetch incremental tails for symbols that already have bulk fragments.
+
+    P0-1 incremental mode (fetch side). Per-symbol plan:
+      * gap = calendar days between ``today`` and the symbol's last stored bar;
+        gap <= 0 -> skip (already current, ZERO EC);
+      * k = gap + ``overlap`` bars requested (overlap bridges non-trading days
+        between the stored tail and now, and forces row-level reconciliation
+        against the stored series: immutable history must agree - see
+        resume.load_panel_with_tail);
+      * k > ``tail_max_n`` -> skip loud: the tail stops being cheaper than a
+        full re-pull, so the caller is told to bulk-refetch the symbol;
+      * valuation refresh fires only when ``valuation_days`` elapsed since the
+        symbol's last valuation snapshot.
+
+    LIVE-ONLY by design: the demo snapshot has neither adj= nor bar windows
+    (probe 2026-11-17), and an incremental mode cannot honestly fake either.
+    EC ceiling and concurrency share the exact bulk executor discipline
+    (``_execute_per_symbol``).
+    """
+    if not live:
+        raise normalize.NormalizeError(
+            "incremental tail fetch is live-only: the demo snapshot supports "
+            "neither adj= nor n-window refetch, and an incremental mode cannot "
+            "fake either (use dump-history for the demo full path)"
+        )
+    c_main = client if client is not None else _client(live)
+    instrument_map = normalize.build_instrument_map(c_main)
+    symbols = list(symbols)
+    warnings: list[str] = []
+    today_date = dt.date.fromisoformat(today) if today else dt.date.today()
+
+    unknown = [s for s in symbols if s not in instrument_map]
+    if unknown:
+        raise normalize.NormalizeError(
+            f"symbols outside universe: {unknown[:5]} (limit universe to stocks.list codes)"
+        )
+
+    # --- plan phase (pure bookkeeping, zero EC) ---
+    plan: dict[str, tuple[str, int, bool]] = {}
+    v_last_map = valuation_last_dates or {}
+    for s in symbols:
+        last = last_dates.get(s)
+        if not last:
+            warnings.append(
+                f"{s}: skipped - no bulk fragment on record; run dump-history first"
+            )
+            continue
+        gap = (today_date - dt.date.fromisoformat(str(last))).days
+        if gap <= 0:
+            warnings.append(f"{s}: up to date (last {last}), 0 EC spent")
+            continue
+        k = gap + overlap
+        if k > tail_max_n:
+            warnings.append(
+                f"{s}: skipped - gap {gap}d needs k={k} > tail_max_n={tail_max_n}; "
+                f"tail no longer cheaper than a full re-pull, bulk-refetch this symbol"
+            )
+            continue
+        v_last = v_last_map.get(s)
+        v_due = v_last is None or (
+            (today_date - dt.date.fromisoformat(str(v_last))).days >= valuation_days
+        )
+        plan[s] = (normalize.to_qlib_instrument(s, instrument_map), k, v_due)
+
+    meter = Metering(
+        mode="live",
+        note=("live incremental tail: kline adj+raw per symbol "
+              "(156+67k EC each, deterministic), moneyflow tail, valuation "
+              "on cadence; overlap rows reconcile against stored history"),
+    )
+    collected: dict[str, tuple[str, tuple[list[pd.DataFrame], int, float | None, list[str]]]] = {}
+
+    def _run(symbol: str):
+        wc = c_main if max_workers <= 1 else _client(live)
+        instrument, k, v_due = plan[symbol]
+        return symbol, instrument, _fetch_tail_one_symbol(
+            wc, symbol, instrument, k, v_due, fields
+        )
+
+    def _absorb(symbol: str, instrument: str, payload) -> None:
+        frames, reqs, ec, warns = payload
+        meter.requests += reqs
+        if ec is not None:
+            meter.ec_cost = (meter.ec_cost or 0.0) + ec
+        warnings.extend(warns)
+        collected[symbol] = (instrument, payload)
+        if on_symbol is not None:
+            on_symbol(symbol, instrument, frames, ec)
+
+    _execute_per_symbol(
+        list(plan.keys()),
+        run_fn=_run,
+        absorb_fn=_absorb,
+        effective_workers=max(1, int(max_workers)),
+        max_ec=max_ec,
+        meter=meter,
+        warnings=warnings,
+    )
+
+    frames_all: list[pd.DataFrame] = []
+    for s in symbols:  # original order -> deterministic concat
+        if s in collected:
+            frames_all.extend(collected[s][1][0])
+    panel = pd.concat(frames_all, ignore_index=True) if frames_all else pd.DataFrame(
+        columns=["date", "symbol", "instrument", "field", "value"]
+    )
+    if not panel.empty:
+        panel["value"] = panel["value"].astype(float)
+    return FetchResult(frame=panel, metering=meter, warnings=list(dict.fromkeys(warnings)))
+
+
+def fetch_cross_section_snapshot(
+    symbols: Iterable[str],
+    *,
+    live: bool = True,
+    as_of: str | None = None,
+    client: Any | None = None,
+    metric_codes: tuple[Any, ...] = config.SNAPSHOT_METRICS,
+    max_ec: float | None = None,
+    exclude_st: bool = True,
+    exclude_suspended: bool = True,
+) -> FetchResult:
+    """Cross-section score from the kline.snapshot BATCH (P0-3).
+
+    Why this path: the server does not serve screener index subsets
+    (`index.hs300` -> "not loadable", probe 2026-11-17) and screener.query
+    bills the SCANNED universe, so the scan size cannot be narrowed
+    client-side. ``kline.snapshot`` accepts an explicit symbol list and bills
+    per ticket (~100 EC/票 at N=3, ~58 claimed at scale) - the only path that
+    makes an hs300-sized DAILY cross-section sustainable (~17-30k EC/day for
+    ~300 names vs ~204k for a full-market screener query).
+
+    Score family: TECHNICAL COMPOSITE (see config.SNAPSHOT_METRICS) - declared
+    directions, z-score composite. NOT the screener fundamentals family;
+    the metering note labels it so the score meta never blurs the two.
+
+    Guards:
+      * LIVE-only (demo snapshot has no snapshot-batch endpoint);
+      * >= 3 symbols (the SDK's native batch route); fewer would silently
+        fall back to per-ticket evaluation at 10,250 EC each;
+      * universe intersected with stocks.list (66 EC) - unmapped codes are
+        dropped with a warning, never scored under a bare code;
+      * ST / suspended rows are DROPPED with a warning (universe hygiene,
+        anti-pitfall #5: never scored, never filled);
+      * rows missing any metric value are DROPPED with a warning
+        (anti-pitfall #5: a 0 z-score pretends "exactly average");
+      * ``max_ec`` REQUIRED (pre-flight ack), enforced post-hoc via
+        ``client.last_ec_cost`` - the batch result itself does not carry EC.
+    """
+    if not live:
+        raise normalize.NormalizeError(
+            "snapshot cross-section is live-only (the demo snapshot has no "
+            "snapshot-batch endpoint); the demo score path is fetch_cross_section"
+        )
+    if max_ec is None:
+        raise normalize.NormalizeError(
+            "snapshot cross-section requires an explicit max_ec: the batch "
+            "bills per ticket (measured ~100 EC/票 at N=3) and out-of-index "
+            "tickets would fall back to per-ticket evaluation (~10k EC each); "
+            "set the budget before firing"
+        )
+    symbols = list(symbols)
+    if len(symbols) < 3:
+        raise normalize.NormalizeError(
+            f"snapshot batch needs >= 3 symbols (got {len(symbols)}): fewer "
+            f"falls back to per-ticket evaluation at ~10,250 EC each"
+        )
+    c = client if client is not None else _client(live=True)
+    day = as_of or dt.date.today().isoformat()
+    meter = Metering(
+        mode="live",
+        note=("live snapshot-batch cross-section: TECHNICAL COMPOSITE family "
+              "(config.SNAPSHOT_METRICS), per-ticket billing (~100 EC/票 at N=3), "
+              "ST/suspended and missing-metric rows dropped, never filled"),
+    )
+    warnings: list[str] = []
+
+    instrument_map = normalize.build_instrument_map(c)  # stocks.list: 66 EC
+    meter.requests += 1
+    unmapped = [s for s in symbols if s not in instrument_map]
+    if unmapped:
+        warnings.append(
+            f"{len(unmapped)} symbol(s) not in stocks.list (dropped, e.g. "
+            f"{unmapped[:5]}) - universe must be equity codes"
+        )
+    universe = [s for s in symbols if s in instrument_map]
+    if not universe:
+        raise normalize.NormalizeError("no scorable symbols left in universe")
+
+    # Client-side chunking (config.SNAPSHOT_BATCH_CHUNK, measured 2026-11-17:
+    # ~81-ticket single batches fail server-side, <=30-ticket chunks succeed).
+    # EC is the SUM of per-chunk last_ec_cost readings (per-call semantics,
+    # same pattern as the per-symbol meter).
+    results: dict[str, dict] = {}
+    n_requests = 0
+    ec_total = 0.0
+    has_meter = False
+    for i in range(0, len(universe), config.SNAPSHOT_BATCH_CHUNK):
+        chunk = universe[i:i + config.SNAPSHOT_BATCH_CHUNK]
+        snap = c.kline.snapshot(chunk)
+        n_requests += int(getattr(snap, "requests", 1) or 1)
+        results.update(getattr(snap, "results", None) or {})
+        errs = getattr(snap, "errors", None) or {}
+        if errs:
+            warnings.append(f"{len(errs)} ticket(s) errored in chunk "
+                            f"{i // config.SNAPSHOT_BATCH_CHUNK} (dropped, "
+                            f"e.g. {list(errs)[:3]})")
+        v = getattr(c, "last_ec_cost", None)
+        if v is not None:
+            ec_total += float(v)
+            has_meter = True
+    meter.requests += n_requests
+    meter.ec_cost = ec_total if has_meter else None
+    if (meter.ec_cost or 0.0) > max_ec:
+        raise normalize.NormalizeError(
+            f"snapshot cross-section EC ceiling {max_ec} exceeded: chunks cost "
+            f"{meter.ec_cost:.1f} EC for {len(universe)} tickets - check the "
+            f"universe for out-of-index codes (per-ticket fallback ~10k EC each)"
+        )
+    results = results or {}
+    errs = getattr(snap, "errors", None) or {}
+    if errs:
+        warnings.append(f"{len(errs)} ticket(s) errored in the batch (dropped, "
+                        f"e.g. {list(errs)[:3]})")
+
+    rows = []
+    n_st, n_susp = 0, 0
+    for sym, fields in results.items():
+        if not isinstance(fields, dict):
+            continue
+        if exclude_st and fields.get("is_st"):
+            n_st += 1
+            continue
+        if exclude_suspended and fields.get("is_suspend"):
+            n_susp += 1
+            continue
+        rows.append({"symbol": str(sym), **{k: v for k, v in fields.items()
+                                            if k not in ("is_st", "is_suspend")}})
+    if n_st:
+        warnings.append(f"dropped {n_st} ST row(s) (universe hygiene, never scored)")
+    if n_susp:
+        warnings.append(f"dropped {n_susp} suspended row(s) (universe hygiene)")
+    if not rows:
+        raise normalize.NormalizeError("snapshot batch returned no scorable rows")
+
+    wide = pd.DataFrame(rows)
+    codes = [m.code for m in metric_codes]
+    present = set(wide.columns)
+    for code in codes:
+        if code not in present:
+            warnings.append(f"metric field {code} absent from snapshot output (dropped)")
+    wide["instrument"] = wide["symbol"].astype(str).map(instrument_map)
+    frame = _score_from_wide(wide, metric_codes, day, warnings=warnings)
+    return FetchResult(frame=frame, metering=meter, warnings=warnings)
+
+
+def fetch_index_members(client: Any, key: str) -> FetchResult:
+    """Real index membership via ``indices.members`` (P1-1 universe source).
+
+    LIVE-ONLY: the demo client has no ``indices`` namespace (verified
+    offline). Cost is NOT yet probed (a pending roadmap item) - pass --max-ec
+    at the CLI layer before firing. Returns bare codes; instrument mapping
+    happens at the caller via ``stocks.list`` (66 EC).
+    """
+    try:
+        raw = client.indices.members(key)
+    except AttributeError as exc:
+        raise normalize.NormalizeError(
+            f"client has no indices namespace (demo snapshot is unsupported; "
+            f"index membership requires a live client): {exc}"
+        ) from exc
+    meter = Metering(mode="live", note=f"live indices.members({key}); "
+                                      "cost not yet probed (roadmap §5)")
+    warnings: list[str] = []
+    if isinstance(raw, pd.DataFrame):
+        df = raw
+    else:
+        df = pd.DataFrame(raw)
+    sym_col = next((c0 for c0 in ("symbol", "code", "sym") if c0 in df.columns),
+                   df.columns[0])
+    codes = df[sym_col].astype(str).tolist()
+    ec = getattr(client, "last_ec_cost", None)
+    if ec is not None:
+        meter.ec_cost = float(ec)
+    meter.requests = 1
+    if not codes:
+        raise normalize.NormalizeError(f"index {key!r} returned no members")
+    return FetchResult(frame=pd.DataFrame({"symbol": codes}),
+                       metering=meter, warnings=warnings)
+
+
+def filter_universe_hygiene(
+    symbols: Iterable[str],
+    *,
+    client: Any,
+    exclude_st: bool = True,
+    exclude_suspended: bool = True,
+    max_ec: float | None = None,
+) -> FetchResult:
+    """Drop ST / suspended symbols from a universe via kline.snapshot (P1-1).
+
+    LIVE-only hygiene pre-pass: ~100 EC/票 (plus the 66 EC stocks.list) buys
+    the is_st/is_suspend flags BEFORE any expensive history fetch. Shares the
+    snapshot-batch guards with the P0-3 cross-section: >= 3 symbols, universe
+    intersected with stocks.list, --max-ec post-hoc ceiling.
+    """
+    if max_ec is None:
+        raise normalize.NormalizeError(
+            "universe hygiene requires an explicit max_ec (snapshot batch "
+            "bills per ticket; out-of-index tickets fall back to ~10k EC each)"
+        )
+    symbols = list(symbols)
+    if len(symbols) < 3:
+        raise normalize.NormalizeError(
+            f"snapshot batch needs >= 3 symbols (got {len(symbols)})"
+        )
+    instrument_map = normalize.build_instrument_map(client)
+    universe = [s for s in symbols if s in instrument_map]
+    dropped_unmapped = [s for s in symbols if s not in instrument_map]
+    warnings: list[str] = []
+    if dropped_unmapped:
+        warnings.append(
+            f"{len(dropped_unmapped)} symbol(s) not in stocks.list (dropped, "
+            f"e.g. {dropped_unmapped[:5]})"
+        )
+    if not universe:
+        raise normalize.NormalizeError("no hygiene-checkable symbols left")
+    snap = client.kline.snapshot(universe)
+    ec = getattr(client, "last_ec_cost", None)
+    meter = Metering(mode="live", requests=2,  # stocks.list + batch
+                     ec_cost=float(ec) if ec is not None else None,
+                     note="live snapshot hygiene pass (is_st/is_suspend)")
+    if (meter.ec_cost or 0.0) > max_ec:
+        raise normalize.NormalizeError(
+            f"hygiene EC ceiling {max_ec} exceeded: batch cost "
+            f"{meter.ec_cost:.1f} EC"
+        )
+    results = getattr(snap, "results", None) or {}
+    errs = getattr(snap, "errors", None) or {}
+    if errs:
+        warnings.append(f"{len(errs)} ticket(s) errored in the batch (dropped)")
+    keep, n_st, n_susp = [], 0, 0
+    for sym, fields in results.items():
+        if not isinstance(fields, dict):
+            continue
+        if exclude_st and fields.get("is_st"):
+            n_st += 1
+            continue
+        if exclude_suspended and fields.get("is_suspend"):
+            n_susp += 1
+            continue
+        keep.append(instrument_map[str(sym)])
+    if n_st:
+        warnings.append(f"dropped {n_st} ST symbol(s)")
+    if n_susp:
+        warnings.append(f"dropped {n_susp} suspended symbol(s)")
+    return FetchResult(frame=pd.DataFrame({"instrument": keep}),
+                       metering=meter, warnings=warnings)
 
 
 def fetch_cross_section(

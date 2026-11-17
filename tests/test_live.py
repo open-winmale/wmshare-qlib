@@ -23,7 +23,12 @@ import pytest
 from wmshare_qlib import fetch, normalize, panel
 
 SYMS = ["600519", "000858", "601398"]
-EC_BUDGET = 5000  # pre-declared ceiling for this whole live test module
+# P0-2' (hfq_factor): kline is pulled TWICE per symbol (adj + raw), so the
+# per-symbol live bundle rose from ~6 calls to ~7. Measured deterministic
+# pricing (docs/optimization-roadmap.md §2.5): kline = 156 + 67n EC/call,
+# n=20 x 3 symbols -> kline ~9.0k + valuation ~8.5k + moneyflow ~1.4k ~ 19k.
+# Ceiling stays pre-declared BEFORE the fact.
+EC_BUDGET = 25_000
 
 
 def _live_enabled() -> bool:

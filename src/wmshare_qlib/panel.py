@@ -71,6 +71,10 @@ def assert_panel_integrity(panel: pd.DataFrame) -> dict:
     - value magnitudes are within their unit's declared range (vectorized form
       of normalize.guard_unit; catches scale drift before it enters Qlib)
     - cross-field date alignment (see assert_dates_aligned_across_fields)
+    - factor is positive and non-decreasing per instrument (P0-2': hfq_factor
+      emits the real cumulative ratio; a decrease means mixed-convention
+      fragments or upstream inconsistency - the manifest param guard is the
+      first line of defense, this is the dump-time backstop)
 
     NULL values are counted and reported in ``null_values`` but do NOT fail
     ``ok``: missing data is legitimate (cold cache, suspension); wrong data is
@@ -84,7 +88,8 @@ def assert_panel_integrity(panel: pd.DataFrame) -> dict:
     if dates.isna().any():
         issues.append(f"{int(dates.isna().sum())} unparseable dates")
     bad_inst = [i for i in panel["instrument"].unique()
-                if not (str(i)[:2].upper() in {"SH", "SZ", "BJ"} and str(i)[2:].isdigit())]
+                if not (str(i)[:2].upper() in {"SH", "SZ", "BJ", "HK"}
+                        and str(i)[2:].isdigit())]
     if bad_inst:
         issues.append(f"malformed instruments: {bad_inst[:5]}")
     nas = int(panel["value"].isna().sum())
@@ -113,6 +118,30 @@ def assert_panel_integrity(panel: pd.DataFrame) -> dict:
     # the anchor price dates per instrument; a systematic offset fails loud.
     alignment = assert_dates_aligned_across_fields(panel)
     issues.extend(alignment["issues"])
+    # Factor gate (P0-2'): per instrument the cumulative adjustment factor must
+    # be positive and NON-DECREASING along dates. hfq_factor emits the real
+    # hfq/raw ratio (jumps UP at ex-div dates only); qfq_const emits 1.0 and
+    # passes trivially. A decrease means upstream inconsistency or - the
+    # dangerous silent case - fragments fetched under MIXED conventions being
+    # concatenated (manifest param guard is the first line; this is the backstop).
+    factors = panel[panel["field"] == "factor"]
+    if not factors.empty:
+        for inst, sub in factors.groupby("instrument"):
+            ordered = sub.sort_values("date")
+            s = ordered["value"].astype(float).reset_index(drop=True)
+            dates = ordered["date"].tolist()
+            nonpos = int((s <= 0).sum())
+            if nonpos:
+                issues.append(f"{inst}: {nonpos} non-positive factor value(s)")
+            bad = s.diff().dropna()
+            bad = bad[bad < -1e-9]
+            if not bad.empty:
+                p = int(bad.index[0])  # positional; diff() drops row 0, so p >= 1
+                issues.append(
+                    f"{inst}: factor DECREASES at {dates[p]} "
+                    f"({s.iloc[p - 1]:.6g} -> {s.iloc[p]:.6g}); "
+                    f"hfq factor is cumulative and only jumps up"
+                )
     return {
         "ok": len(issues) == 0,
         "issues": issues,

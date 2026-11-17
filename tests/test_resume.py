@@ -129,6 +129,31 @@ def test_resume_param_guard(tmp_path):
         )
 
 
+def test_resume_new_param_key_refused_when_fragments_exist(tmp_path):
+    """P0-2' guard: a store whose manifest predates the 'adjust' key holds
+    fragments of unknowable convention (pre-hfq_factor stores are qfq_const;
+    new runs are hfq_factor). Mixing them would place two different price
+    bases in one dump - the manifest guard must refuse BEFORE any fetch.
+    An empty store (no fragments) may adopt the new key freely.
+    """
+    store = tmp_path / "resume"
+    m = resume.init_manifest(store, params={"n": 60, "live": False}, resume=False)
+    frag = pd.DataFrame({
+        "date": _desc_dates(2), "symbol": "600519", "instrument": "SH600519",
+        "field": "close", "value": [10.5, 10.6],
+    })
+    resume.record_fragment(store, m, "600519", "SH600519", [frag], None)
+    with pytest.raises(ValueError, match="predates param 'adjust'"):
+        resume.init_manifest(
+            store, params={"n": 60, "live": False, "adjust": "hfq_factor"},
+            resume=True,
+        )
+    # empty store adopts the key freely (nothing to mix)
+    empty = tmp_path / "empty"
+    resume.init_manifest(empty, params={"n": 60}, resume=False)
+    resume.init_manifest(empty, params={"n": 60, "adjust": "hfq_factor"}, resume=True)
+
+
 # --- gate 5: EC hard ceiling stops before submitting remaining symbols -------
 class _StubGroup:
     """A sub-client whose methods set the parent's last_ec_cost on each call."""
@@ -150,12 +175,19 @@ class _StubKline(_StubGroup):
         # P0-1 concurrency n-shadowing bug.
         rows = max(1, int(n or 3))
         dates = _desc_dates(rows)
+        # PARAM-SENSITIVE PER adj TOO (P0-2' discipline): hfq prices are a
+        # strict 3x of raw, so factor=1.0 can never happen by accident - an
+        # adj-blind stub (identical values both pulls) would silently emit
+        # factor=1.0 and hide a lost dual-pull. volume is NOT scaled (upstream
+        # volume is unadjusted, probe 2026-11-17); the adapter divides by
+        # factor per the Qlib convention.
+        scale = 3.0 if adj == "hfq" else 1.0
         return pd.DataFrame({
             "date": dates,
-            "open": [10.0 + i for i in range(rows)],
-            "high": [11.0 + i for i in range(rows)],
-            "low": [9.0 + i for i in range(rows)],
-            "close": [10.5 + i for i in range(rows)],
+            "open": [(10.0 + i) * scale for i in range(rows)],
+            "high": [(11.0 + i) * scale for i in range(rows)],
+            "low": [(9.0 + i) * scale for i in range(rows)],
+            "close": [(10.5 + i) * scale for i in range(rows)],
             "volume": [100.0 + i for i in range(rows)],
             "amount": [1050.0 + i for i in range(rows)],
         })
@@ -236,20 +268,46 @@ def test_live_concurrent_delivers_n_rows_per_symbol(monkeypatch):
     param-sensitive (returns EXACTLY n rows), so a polluted n can no longer
     hide behind a fixed-size fixture.
     """
-    monkeypatch.setattr(fetch, "_client", lambda live: _StubClient(ec_per_call=1.0))
+    monkeypatch.setattr(fetch, "_client", lambda live, **kw: _StubClient(ec_per_call=1.0))
     n = 7
     r = fetch.fetch_history_panel(SYMS, n=n, max_workers=2, live=True)
     closes = r.frame[r.frame["field"] == "close"]
     per_symbol = closes.groupby("instrument").size()
     assert (per_symbol == n).all(), f"n polluted under concurrency: {dict(per_symbol)}"
     assert int(per_symbol.sum()) == n * len(SYMS)
-    # full request accounting: 1 kline + 4 valuation + 1 moneyflow per symbol
-    assert r.metering.requests == len(SYMS) * 6, r.metering.requests
+    # full request accounting (hfq_factor, P0-2'): 2 kline (adj + raw)
+    # + 4 valuation + 1 moneyflow per symbol
+    assert r.metering.requests == len(SYMS) * 7, r.metering.requests
+
+
+def test_live_hfq_factor_emitted_and_volume_scaled(monkeypatch):
+    """P0-2' gate: under hfq_factor the panel carries a REAL factor column
+    (stub hfq = 3x raw -> factor exactly 3.0) and volume is divided by it
+    (upstream volume is unadjusted; Qlib convention volume_adj = raw/factor).
+    An adj-blind stub or a lost dual-pull would emit factor=1.0 - this test
+    fails on that exact shape.
+    """
+    monkeypatch.setattr(fetch, "_client", lambda live, **kw: _StubClient(ec_per_call=1.0))
+    n = 7
+    r = fetch.fetch_history_panel(SYMS[:1], n=n, live=True)
+    f = r.frame[r.frame["field"] == "factor"]
+    assert len(f) == n, f"factor rows missing: {len(f)} != {n}"
+    assert ((f["value"] - 3.0).abs() < 1e-9).all(), sorted(f["value"].unique())
+    closes = r.frame[r.frame["field"] == "close"].sort_values("date")
+    assert (closes["value"] > 30.0).all(), "close must be the hfq (3x) series"
+    vols = r.frame[r.frame["field"] == "volume"].sort_values("date")
+    # ascending dates: iloc[-1] is the NEWEST bar (raw volume 100) / factor 3.0
+    assert vols["value"].iloc[-1] == pytest.approx(100.0 / 3.0)
+    assert vols["value"].iloc[0] == pytest.approx(106.0 / 3.0)
+    # demo is unaffected (single pull): sanity anchor for the demo regression
+    r_demo = fetch.fetch_history_panel(SYMS[:1], n=n)
+    f_demo = r_demo.frame[r_demo.frame["field"] == "factor"]
+    assert (f_demo["value"] == 1.0).all()
 
 
 def test_live_concurrent_max_ec_stops_before_submit(monkeypatch):
     """EC hard ceiling must hold in the CONCURRENT branch too (probe + bound)."""
-    monkeypatch.setattr(fetch, "_client", lambda live: _StubClient(ec_per_call=10.0))
+    monkeypatch.setattr(fetch, "_client", lambda live, **kw: _StubClient(ec_per_call=10.0))
     r = fetch.fetch_history_panel(SYMS, n=7, max_workers=2, live=True, max_ec=50.0)
     instruments = set(r.frame["instrument"].unique())
     assert len(instruments) == 1, f"ceiling did not stop concurrent submit: {instruments}"

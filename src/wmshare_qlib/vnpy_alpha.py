@@ -29,7 +29,7 @@ from typing import Any, Iterable
 
 import pandas as pd
 
-from . import normalize, panel as panel_mod
+from . import panel as panel_mod
 
 # vnpy Exchange values per wmshare exchange suffix (config.EXCHANGE_SUFFIX keys
 # are lowercase 'sh'/'sz'/'bj'; qlib instruments carry the uppercase prefix).
@@ -191,7 +191,9 @@ def build_alpha_dataset(
     return ds, Segment
 
 
-def assert_dataset_roundtrip(ds: Any, Segment: Any, panel: pd.DataFrame, fields: Iterable[str]) -> dict:
+def assert_dataset_roundtrip(
+    ds: Any, Segment: Any, panel: pd.DataFrame, fields: Iterable[str]
+) -> dict:
     """M5 gate: prepare + fetch_learn must return injected values EXACTLY.
 
     Two-way reconciliation (request-response discipline):
