@@ -31,12 +31,12 @@ FIELD_UNITS: dict[str, str] = {
 }
 
 # Direction of each upstream series (AGENTS.md anti-pitfall #3: points[0]).
-# kline.bars -> newest first; valuation.hist_stats.series -> oldest first.
-# We do NOT assume; normalize asserts the first/last date after sort.
+# Since wmshare 2.0 ALL facade series return ASCENDING (oldest -> newest,
+# newest at iloc[-1]); we do NOT assume - normalize asserts first/last date.
 SERIES_EXPECTED_ORDER: dict[str, str] = {
-    "kline.bars": "desc",        # demo + live both newest -> oldest
-    "valuation.hist_stats": "asc",  # [unix_ts, value] ascending
-    "moneyflow.bars": "desc",
+    "kline.bars": "asc",            # 2.x ascending contract
+    "valuation.hist_stats": "asc",  # envelope data.series ascending
+    "moneyflow.bars": "asc",        # 2.x ascending contract
 }
 
 # Exchange suffix mapping (wmshare bare code -> Qlib instrument).

@@ -26,9 +26,10 @@ EXDIV_DAY = "2026-11-13"    # hfq factor steps UP here (event applies to >= day)
 KEY = ["date", "instrument", "field", "value"]
 
 
-def _dates_desc(today: str, n: int) -> list[str]:
+def _dates_asc(today: str, n: int) -> list[str]:
+    """`n` calendar dates ENDING at `today`, OLDEST first (2.x asc)."""
     d = dt.date.fromisoformat(today)
-    return [(d - dt.timedelta(days=i)).isoformat() for i in range(n)]
+    return [(d - dt.timedelta(days=n - 1 - i)).isoformat() for i in range(n)]
 
 
 def _doy(iso: str) -> int:
@@ -44,21 +45,14 @@ def _hfq_factor(d: str) -> float:
     return 2.5 if d >= EXDIV_DAY else 2.0
 
 
-def _cst_ts(iso: str) -> int:
-    # Beijing-midnight epoch (normalize._coerce_date convention).
-    return int(dt.datetime.fromisoformat(iso).replace(
-        tzinfo=dt.timezone(dt.timedelta(hours=8))
-    ).timestamp())
-
-
 class _StubKline:
     """Date-deterministic kline: hfq = raw x factor(date); volume unadjusted."""
 
     today = TODAY_BULK
 
-    def bars(self, symbol, n=60, adj=None, _df=False):
+    def bars(self, symbol, n=60, adj=None):
         rows = max(1, int(n or 1))
-        dates = _dates_desc(self.today, rows)
+        dates = _dates_asc(self.today, rows)
         out = {"date": dates, "symbol": symbol}
         for col, base in (
             ("close", _raw_close),
@@ -77,9 +71,9 @@ class _StubKline:
 class _StubMoneyflow:
     today = TODAY_BULK
 
-    def bars(self, symbol, n=60, _df=False):
+    def bars(self, symbol, n=60):
         rows = max(1, int(n or 1))
-        dates = _dates_desc(self.today, rows)
+        dates = _dates_asc(self.today, rows)
         return pd.DataFrame({
             "date": dates,
             "net_mf": [60.0 + _doy(d) * 0.5 for d in dates],
@@ -100,15 +94,21 @@ class _StubValuation:
     today = TODAY_BULK
 
     def hist_stats(self, symbol, metric="pe", window="3y"):
-        dates = _dates_desc(self.today, 80)[::-1]  # ascending
+        dates = _dates_asc(self.today, 80)
+        # 2.x envelope: {ok, as_of, data:{series: DF[date, value]}}, asc.
         return {
             "ok": True,
-            "series": [[_cst_ts(d), 20.0 + _doy(d) * 0.01] for d in dates],
+            "as_of": self.today,
+            "data": {"series": pd.DataFrame({
+                "date": dates,
+                "value": [20.0 + _doy(d) * 0.01 for d in dates],
+            })},
+            "meta": {},
         }
 
 
 class _StubStocks:
-    def list(self, _df=False):
+    def list(self):
         return pd.DataFrame({"symbol": SYMS, "exchange": ["sh", "sz"]})
 
 

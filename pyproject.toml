@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wmshare-qlib"
-version = "0.2.1"
+version = "0.2.2"
 description = "Qlib-native data layer powered by wmshare (CN/HK precomputed factors)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "BSD-3-Clause" }
 dependencies = [
-    "wmshare>=1.22",
+    "wmshare>=2.0.1,<3",
     "pandas>=2.0",
     "pyarrow>=14",
     "numpy>=1.24",

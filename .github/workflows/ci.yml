@@ -23,9 +23,10 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       # wmshare lives in its own public repo (not on PyPI yet); pinned to a
-      # stable upstream tag so API drift on their main cannot break our CI
+      # stable upstream tag so API drift on their main cannot break our CI.
+      # 2.0.1 (not 2.0.0): demo snapshot re-shot + cost_estimate fix.
       - name: Install wmshare (upstream repo, pinned tag)
-        run: pip install "wmshare @ git+https://github.com/open-winmale/wmshare.git@v1.22.2"
+        run: pip install "wmshare @ git+https://github.com/open-winmale/wmshare.git@v2.0.1"
 
       - name: Install package + test deps
         run: pip install -e '.[test]'

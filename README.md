@@ -43,13 +43,13 @@ wmshare-qlib dump-history --symbols 600519 000858 --n 60 --out ./out/qlib_data
 # 2) Verify .bin with Qlib's own reader (anchors: instrument:field:date:value)
 #    Without pyqlib this prints UNAVAILABLE (ok=None), never a false PASS.
 wmshare-qlib verify --qlib-dir ./out/qlib_data \
-  --check SH600519:close:2026-10-30:1392.05
+  --check SH600519:close:2026-11-16:1453.9
 
 # 3) Today's cross section -> score CSV (ScoreFileModel input)
-wmshare-qlib dump-cross-section --as-of 2026-10-30 --out ./out/score
+wmshare-qlib dump-cross-section --as-of 2026-11-16 --out ./out/score
 
 # 4) Accumulate one daily PIT snapshot (the series grows one real day at a time)
-wmshare-qlib accumulate --as-of 2026-10-30 --out ./out/cs_accum
+wmshare-qlib accumulate --as-of 2026-11-16 --out ./out/cs_accum
 
 # 5) Daily incremental update (live, hfq only: fetches NEW bars only, ~1.1k EC/票/天)
 wmshare-qlib update-history --live --max-ec 20000 --out ./out/qlib_data
@@ -111,6 +111,12 @@ the daily cross-section path is `--via snapshot` over an explicit ~300-name univ
 (~17–30k EC/day, technical composite family); full-market daily remains not viable
 on any current endpoint (a server-side fix is requested in
 [docs/upstream-requests.md](docs/upstream-requests.md)).
+
+> Note on SDK pricing models: the SDK's own `estimate_cost` (wmshare 2.x) uses
+> optimistic models for some surfaces (e.g. screener light columns 70–1,000 EC)
+> that diverge from our MEASURED anchors (full market × 4 light columns =
+> 204,430 EC). Both are estimates; the paid `metering.ec_cost` is the only real
+> quote, and `--max-ec` stays the binding ceiling (see roadmap §5 probe #3).
 
 ## Data-correctness gates
 

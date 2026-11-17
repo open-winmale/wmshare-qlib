@@ -41,7 +41,7 @@ def test_instrument_map_uses_exchange_field(client):
 
 
 def test_kline_to_frame_is_ascending(client):
-    raw = client.kline.bars("600519", n=10, _df=True)
+    raw = client.kline.bars("600519", n=10)
     df = normalize.kline_to_frame(raw, symbol="600519")
     dates = pd.to_datetime(df["date"])
     assert dates.iloc[0] < dates.iloc[-1]  # now oldest -> newest
@@ -53,6 +53,33 @@ def test_valuation_series_to_frame_oldest_first(client):
     dates = pd.to_datetime(df["date"])
     assert dates.iloc[0] < dates.iloc[-1]
     assert "pe" in df.columns
+
+
+def test_valuation_envelope_contract():
+    """2.x envelope regression: {ok, as_of, data:{series: DF[date, value]}}.
+
+    The 1.x flat shape ({series: [[ts, val], ...]}) must FAIL LOUD instead of
+    silently parsing to an empty frame (anti-pitfall #5: silent-empty is the
+    exact failure mode that once hid the timezone misalignment).
+    """
+    env = {
+        "ok": True,
+        "as_of": "2026-09-30",
+        "data": {"series": pd.DataFrame({
+            "date": ["2026-09-29", "2026-09-30"],
+            "value": [20.0, 21.0],
+        })},
+        "meta": {},
+    }
+    df = normalize.valuation_series_to_frame(env, symbol="600519")
+    assert list(df["pe"]) == [20.0, 21.0]
+    assert list(df["date"]) == ["2026-09-29", "2026-09-30"]
+    # 1.x flat shape -> loud refusal, never silent-empty
+    with pytest.raises(normalize.NormalizeError, match="2.x envelope"):
+        normalize.valuation_series_to_frame({"ok": True, "series": [[0, 1.0]]}, symbol="600519")
+    # ok=False envelope -> empty frame (annotate path)
+    empty = normalize.valuation_series_to_frame({"ok": False, "data": {}}, symbol="600519")
+    assert empty.empty
 
 
 def test_annotate_missing_ok_false():
@@ -69,23 +96,25 @@ def test_guard_unit_ratio_range():
         normalize.guard_unit("unknown_field", 1.0)
 
 
-# --- P0-2 regression: epoch seconds are Beijing-midnight, NOT UTC ------------
+# --- epoch->date helper: Beijing-midnight epochs must use CST, not UTC --------
 def test_numeric_ts_uses_cst_not_utc():
-    """Upstream valuation stamps are Beijing-midnight epochs (ts%86400==57600).
+    """1.x valuation stamped Beijing-midnight epochs (ts%86400==57600); 2.x
+    delivers ISO dates upstream, but _coerce_date keeps the epoch branch for
+    any raw payload - and that branch MUST stay CST (UTC shifts the date one
+    day early, the P0-2 misalignment).
 
-    UTC conversion shifts the date one day EARLY and silently misaligns $pe
-    against $close. Observed on demo: ts=1793289600 -> UTC 2026-10-29 but the
-    trading date is 2026-10-30 (matches kline). CST must win.
+    The END-TO-END guard for this class of bug now lives in
+    test_valuation_envelope_contract + test_valuation_demo_dates_match_kline_dates.
     """
     ts = 1793289600  # 2026-10-29 16:00 UTC == 2026-10-30 00:00 CST
     assert normalize._coerce_date(ts) == dt.date(2026, 10, 30)
 
 
 def test_valuation_demo_dates_match_kline_dates(client):
-    """End-to-end P0-2 guard: the newest valuation date must equal the newest
-    kline trading date (same instrument, same snapshot day)."""
-    k = client.kline.bars("600519", n=3, _df=True)
-    newest_kline_date = str(k["date"].iloc[0])[:10]
+    """End-to-end date-alignment guard: the newest valuation date must equal
+    the newest kline trading date (same instrument, same snapshot day)."""
+    k = client.kline.bars("600519", n=3)
+    newest_kline_date = str(k["date"].iloc[-1])[:10]  # 2.x ascending
     p = client.valuation.hist_stats("600519", "pe", "3y")
     df = normalize.valuation_series_to_frame(p, symbol="600519")
     newest_val_date = df["date"].iloc[-1]

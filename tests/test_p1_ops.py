@@ -224,9 +224,9 @@ def test_fetch_history_panel_threads_max_limit(monkeypatch):
     captured: dict = {}
 
     class _K:
-        def bars(self, symbol, n=60, adj=None, _df=False):
+        def bars(self, symbol, n=60, adj=None):
             d = dt.date(2026, 11, 17)
-            dates = [(d - dt.timedelta(days=i)).isoformat() for i in range(n)]
+            dates = [(d - dt.timedelta(days=n - 1 - i)).isoformat() for i in range(n)]
             scale = 3.0 if adj == "hfq" else 1.0
             return pd.DataFrame({
                 "date": dates, "symbol": symbol,
@@ -239,24 +239,29 @@ def test_fetch_history_panel_threads_max_limit(monkeypatch):
             })
 
     class _M:
-        def bars(self, symbol, n=60, _df=False):
+        def bars(self, symbol, n=60):
             d = dt.date(2026, 11, 17)
-            dates = [(d - dt.timedelta(days=i)).isoformat() for i in range(n)]
+            dates = [(d - dt.timedelta(days=n - 1 - i)).isoformat() for i in range(n)]
             return pd.DataFrame({"date": dates, "symbol": symbol, "net_mf": [1.0] * n,
                                  "elg_net": [1.0] * n, "lg_net": [1.0] * n,
                                  "md_net": [1.0] * n, "sm_net": [1.0] * n})
 
     class _V:
         def hist_stats(self, symbol, metric="pe", window="3y"):
-            return {"ok": True, "series": [[1761705600, 20.0], [1761792000, 21.0]]}
+            return {
+                "ok": True, "as_of": "2026-11-17",
+                "data": {"series": pd.DataFrame({
+                    "date": ["2026-09-29", "2026-09-30"], "value": [20.0, 21.0],
+                })},
+                "meta": {},
+            }
 
     class _C:
         def __init__(self):
             self.kline, self.moneyflow, self.valuation = _K(), _M(), _V()
             self.last_ec_cost = 1.0
-            self.stocks = type("S", (), {"list": staticmethod(
-                lambda _df=False: pd.DataFrame(
-                    {"symbol": ["600519", "000858"], "exchange": ["sh", "sz"]}))})()
+            self.stocks = type("S", (), {"list": staticmethod(lambda: pd.DataFrame(
+                {"symbol": ["600519", "000858"], "exchange": ["sh", "sz"]}))})()
 
     def fake_client(live, max_limit=None):
         captured["live"] = live

@@ -32,7 +32,7 @@ def build_instrument_map(client: Any) -> dict[str, str]:
     Uses the exchange field ('sh'/'sz'/'bj'), never infers suffix from the number
     prefix (which is wrong for e.g. BJ stocks and some SZ codes).
     """
-    df = client.stocks.list(_df=True)
+    df = client.stocks.list()
     required = {"symbol", "exchange"}
     missing = required - set(df.columns)
     if missing:
@@ -132,7 +132,9 @@ def ascending_frame(
 def kline_to_frame(payload: Any, *, symbol: str | None = None) -> pd.DataFrame:
     """Normalize kline.bars result to a clean ascending DataFrame.
 
-    Handles both DataFrame (_df=True) and list[dict] raw payloads.
+    Handles both DataFrame (the 2.x facade default) and list[dict] raw payloads
+    (``_raw=True``). Since wmshare 2.0 the facade returns date ASCENDING
+    (oldest -> newest); the guard below pins that contract.
     """
     if isinstance(payload, pd.DataFrame):
         df = payload.copy()
@@ -146,21 +148,47 @@ def kline_to_frame(payload: Any, *, symbol: str | None = None) -> pd.DataFrame:
         raise NormalizeError(f"kline payload missing {missing}")
     if symbol is not None:
         df["symbol"] = symbol
-    # Guard the source direction before we normalize to ascending.
-    assert_series_order(df["date"], "desc", f"kline.bars[{symbol}]")
+    # Guard the source direction before we normalize to ascending (2.x: asc).
+    assert_series_order(df["date"], "asc", f"kline.bars[{symbol}]")
     return ascending_frame(df, label=f"kline.bars[{symbol}]")
 
 
 def valuation_series_to_frame(payload: dict[str, Any], *, symbol: str) -> pd.DataFrame:
-    """Normalize valuation.hist_stats().series ([unix_ts, value]) to a frame.
+    """Normalize the valuation.hist_stats() ENVELOPE (wmshare 2.x) to a frame.
 
-    Anti-pitfall #1/#5: ok=False / empty series is returned as an EMPTY frame with
-    an attribute-style marker in the caller, never as zeros.
+    2.x contract: ``{ok, as_of, data: {series: DataFrame[date, value]}}`` where
+    ``series`` is date-ascending and ``date`` is an ISO string (the unix-epoch +
+    CST conversion of 1.x — the P0-2 timezone pitfall — is now handled upstream).
+    Anti-pitfall #1/#5: ok=False / empty series is returned as an EMPTY frame
+    with an attribute-style marker in the caller, never as zeros.
     """
-    series = payload.get("series") or []
-    if not series:
+    if payload.get("ok") is False:
         return pd.DataFrame(columns=["date", "symbol", "pe"])
-    rows = [(_coerce_date(ts), float(val)) for ts, val in series if val is not None]
+    data = payload.get("data")
+    series = data.get("series") if isinstance(data, dict) else None
+    if series is None:
+        # ok=True but no data.series: a shape we don't understand (e.g. the
+        # 1.x flat {series: [[ts, val], ...]}) must FAIL LOUD, never degrade
+        # to a silent empty frame (anti-pitfall #5).
+        raise NormalizeError(
+            f"valuation.hist_stats[{symbol}]: expected the 2.x envelope "
+            f"(data.series DataFrame), got payload keys {sorted(payload.keys())}"
+        )
+    if len(series) == 0:
+        return pd.DataFrame(columns=["date", "symbol", "pe"])
+    if not isinstance(series, pd.DataFrame):
+        raise NormalizeError(
+            f"valuation.hist_stats[{symbol}]: expected the 2.x envelope "
+            f"(data.series DataFrame), got {type(series).__name__}"
+        )
+    missing = {"date", "value"} - set(series.columns)
+    if missing:
+        raise NormalizeError(f"valuation.hist_stats[{symbol}] series missing columns: {missing}")
+    rows = [
+        (_coerce_date(d), float(v))
+        for d, v in zip(series["date"], series["value"])
+        if v is not None
+    ]
     df = pd.DataFrame(rows, columns=["date", "pe"])
     assert_series_order(df["date"], "asc", f"valuation.hist_stats[{symbol}]")
     df["symbol"] = symbol
@@ -176,7 +204,7 @@ def moneyflow_to_frame(payload: Any, *, symbol: str) -> pd.DataFrame:
         raise NormalizeError(f"unsupported moneyflow payload type: {type(payload).__name__}")
     if "date" not in df.columns:
         raise NormalizeError("moneyflow payload missing 'date'")
-    assert_series_order(df["date"], "desc", f"moneyflow.bars[{symbol}]")
+    assert_series_order(df["date"], "asc", f"moneyflow.bars[{symbol}]")
     df["symbol"] = symbol
     return ascending_frame(df, label=f"moneyflow.bars[{symbol}]")
 

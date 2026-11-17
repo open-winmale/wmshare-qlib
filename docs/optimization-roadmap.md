@@ -219,9 +219,10 @@ README 声明 qfq 已复权所以 factor≡1，自洽但隐藏了一个正确性
   `config.EC_*` 单一事实源），四命令发射前报价，超天花板告警，
   不建 store、不发请求。
 
-### P2-1 上游 PR 跟进
+### P2-1 上游 PR 跟进（⏸ 搁置，2026-11-17 用户决定）
 
-`pr_package/` 素材已备、公开仓已建（commit e5bda6b）。下一步：
+`pr_package/` 素材已备、公开仓已建（commit e5bda6b）。qlib collector
+**暂不做**（用户 2026-11-17 拍板）；素材保留，重启时下一步仍是：
 issue 先行问 microsoft/qlib 维护者是否接受第三方数据商依赖
 （pr_package/README 已识别这是最大不确定项）。PR 与 CLA 只能由仓库所有者本人执行。
 
@@ -270,7 +271,9 @@ P2 上游 PR / HK / 基准卡 ← 下一步（所有 P0/P1 实现项已落地；
    demo 诚实降级。
 3. **`screener.query` 定价口径矛盾** —— 未重 probe（本次未发 screener 请求）。
    SDK docstring 声称"不计标的数（实测 70~4.8 万）"与本仓 2026-11-17 实测
-   204,430 EC（随 universe 放大）矛盾。以实测为准，保留**每季度 re-probe**。
+   204,430 EC（随 universe 放大）矛盾；2.0 的 `estimate_cost` 模型
+   （轻列 70~1,000 EC）延续乐观口径，与实测仍差两个量级。
+   以实测为准，保留**每季度 re-probe**。
 4. **README"EC transparency"两条旧锚点** —— 已在 README 加确定性公式更正注记
    （2026-11-17）；一次全 bundle re-probe（1 票 × kline+4 估值+moneyflow，
    估 ~7.4k EC）刷新旧锚点数字仍待执行；`snapshot` 大批量（N=300）单价待 probe。
@@ -288,12 +291,14 @@ P2 上游 PR / HK / 基准卡 ← 下一步（所有 P0/P1 实现项已落地；
    **100 票口径**（含 19 个非 A 股码被 stocks.list 正确剔除）；
    全量拉取 12,754 EC（默认 top-20 也要 6,962 EC——probe 应直接带 top_n）；
    universe 文件机制离线+卫生路径均验证。
-8. **wmshare SDK 2.0.0 漂移（新发现，2026-11-17）**：本地 editable 安装的
-   wmshare 主仓已进 2.0.0，`DemoClient._stocks_list/_kline_bars` 删除了
-   `_df` 参数 → 本地 23 个 Tier-1 测试失败（21 stocks.list + 2 kline.bars，
-   同一根因）。CI 钉 `@v1.22.2` 不受影响。**适配器的 2.x 兼容层**
-   （或钉版本声明）是下一个 P0 候选——在 wmshare 2.x 稳定前，
-   本仓所有 demo 路径测试以 CI（v1.22.2）为准。
+8. ~~**wmshare SDK 2.0.0 漂移**~~ ✅ **已适配（2026-11-17，v0.2.2）**：clean break
+   到 `wmshare>=2.0.1,<3`（2.0.0 的 demo 快照旧且缺 cost_estimate）。
+   2.0 破坏面四类全部落地：`_df` 全删（src 10 处 + examples 1 处）、
+   序列升序（守卫翻转，管道本体不动——ascending_frame 本就统一升序输出）、
+   hist_stats/screener.query 信封化（data.series DF / data.rows；1.x 平铺形状
+   响亮拒绝而非静默空帧）、demo 快照重拍 2026-11-17（锚值 1453.9 @2026-11-16）。
+   异常体系零变化 → 重试策略零改动。本地 87 passed 与 CI（@v2.0.1）同版本。
+   单位台账换算（2.0 强制基础单位）与适配器既有单位声明一致，无需改。
 
 ## 六、明确不做（延续 README 红线）
 

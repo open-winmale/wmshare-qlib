@@ -23,10 +23,10 @@ SYMS = ["600519", "000858", "601318"]
 KEY = ["date", "instrument", "field", "value"]
 
 
-def _desc_dates(rows: int, *, end: str = "2026-10-30") -> list[str]:
-    """`rows` trading-like dates, newest first (desc) - stub kline/mf shape."""
+def _asc_dates(rows: int, *, end: str = "2026-10-30") -> list[str]:
+    """`rows` trading-like dates, OLDEST first (2.x asc) - stub kline/mf shape."""
     d = dt.date.fromisoformat(end)
-    return [(d - dt.timedelta(days=i)).isoformat() for i in range(rows)]
+    return [(d - dt.timedelta(days=rows - 1 - i)).isoformat() for i in range(rows)]
 
 
 def _canonical(frame: pd.DataFrame) -> pd.DataFrame:
@@ -139,7 +139,7 @@ def test_resume_new_param_key_refused_when_fragments_exist(tmp_path):
     store = tmp_path / "resume"
     m = resume.init_manifest(store, params={"n": 60, "live": False}, resume=False)
     frag = pd.DataFrame({
-        "date": _desc_dates(2), "symbol": "600519", "instrument": "SH600519",
+        "date": _asc_dates(2), "symbol": "600519", "instrument": "SH600519",
         "field": "close", "value": [10.5, 10.6],
     })
     resume.record_fragment(store, m, "600519", "SH600519", [frag], None)
@@ -168,13 +168,13 @@ class _StubGroup:
 
 
 class _StubKline(_StubGroup):
-    def bars(self, symbol, n=60, adj=None, _df=False):
+    def bars(self, symbol, n=60, adj=None):
         self._bill()
-        # PARAM-SENSITIVE: exactly n rows, newest first (desc) - normalize
-        # asserts this before reversing. A fixed-size fixture would hide the
+        # PARAM-SENSITIVE: exactly n rows, OLDEST first (2.x asc) - normalize
+        # asserts this direction. A fixed-size fixture would hide the
         # P0-1 concurrency n-shadowing bug.
         rows = max(1, int(n or 3))
-        dates = _desc_dates(rows)
+        dates = _asc_dates(rows)
         # PARAM-SENSITIVE PER adj TOO (P0-2' discipline): hfq prices are a
         # strict 3x of raw, so factor=1.0 can never happen by accident - an
         # adj-blind stub (identical values both pulls) would silently emit
@@ -196,16 +196,24 @@ class _StubKline(_StubGroup):
 class _StubValuation(_StubGroup):
     def hist_stats(self, symbol, metric="pe", window="3y"):
         self._bill()
-        # ascending unix timestamps
-        return {"ok": True, "series": [[1761705600, 20.0], [1761792000, 21.0]]}
+        # 2.x envelope: {ok, as_of, data:{series: DF[date, value]}}, asc.
+        return {
+            "ok": True,
+            "as_of": "2026-10-30",
+            "data": {"series": pd.DataFrame({
+                "date": _asc_dates(2, end="2026-09-30"),
+                "value": [20.0, 21.0],
+            })},
+            "meta": {},
+        }
 
 
 class _StubMoneyflow(_StubGroup):
-    def bars(self, symbol, n=60, _df=False):
+    def bars(self, symbol, n=60):
         self._bill()
         # PARAM-SENSITIVE: n rows (P0-1 discipline, see module docstring).
         rows = max(1, int(n or 2))
-        dates = _desc_dates(rows)
+        dates = _asc_dates(rows)
         return pd.DataFrame({
             "date": dates,
             "net_mf": [100.0 - i for i in range(rows)],
@@ -217,7 +225,7 @@ class _StubMoneyflow(_StubGroup):
 
 
 class _StubStocks:
-    def list(self, _df=False):
+    def list(self):
         return pd.DataFrame({
             "symbol": SYMS,
             "exchange": ["sh", "sz", "sh"],
@@ -296,9 +304,9 @@ def test_live_hfq_factor_emitted_and_volume_scaled(monkeypatch):
     closes = r.frame[r.frame["field"] == "close"].sort_values("date")
     assert (closes["value"] > 30.0).all(), "close must be the hfq (3x) series"
     vols = r.frame[r.frame["field"] == "volume"].sort_values("date")
-    # ascending dates: iloc[-1] is the NEWEST bar (raw volume 100) / factor 3.0
-    assert vols["value"].iloc[-1] == pytest.approx(100.0 / 3.0)
-    assert vols["value"].iloc[0] == pytest.approx(106.0 / 3.0)
+    # ascending dates: iloc[0] is the OLDEST bar (raw volume 100) / factor 3.0
+    assert vols["value"].iloc[0] == pytest.approx(100.0 / 3.0)
+    assert vols["value"].iloc[-1] == pytest.approx(106.0 / 3.0)
     # demo is unaffected (single pull): sanity anchor for the demo regression
     r_demo = fetch.fetch_history_panel(SYMS[:1], n=n)
     f_demo = r_demo.frame[r_demo.frame["field"] == "factor"]

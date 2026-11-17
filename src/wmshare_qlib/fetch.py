@@ -162,7 +162,9 @@ def _valuation_frames(
         if normalize.annotate_missing(payload):
             warnings.append(f"{symbol}/{vfield}: ok=False skipped (cold cache)")
             continue
-        n_series = len(payload.get("series") or [])
+        env_data = payload.get("data")
+        env_series = env_data.get("series") if isinstance(env_data, dict) else None
+        n_series = 0 if env_series is None else len(env_series)
         vdf = normalize.valuation_series_to_frame(payload, symbol=symbol)
         vdf = vdf.rename(columns={"pe": "value"})
         if vdf.empty:
@@ -221,12 +223,12 @@ def _fetch_one_symbol(
         # a mismatch raises inside the merge - never merge on a best-effort
         # subset.
         kadj = call_with_retry(
-            lambda: c.kline.bars(symbol, n=n, adj="hfq", _df=True),
+            lambda: c.kline.bars(symbol, n=n, adj="hfq"),
             label=f"{symbol}/kline(adj)", meter_cb=_meter, warn_cb=warnings.append,
         )
         requests += 1
         kraw = call_with_retry(
-            lambda: c.kline.bars(symbol, n=n, adj=None, _df=True),
+            lambda: c.kline.bars(symbol, n=n, adj=None),
             label=f"{symbol}/kline(raw)", meter_cb=_meter, warn_cb=warnings.append,
         )
         requests += 1
@@ -245,13 +247,13 @@ def _fetch_one_symbol(
         if live:
             # Explicit qfq_const on live: single pull, factor=1.0 (v1 behaviour).
             kraw = call_with_retry(
-                lambda: c.kline.bars(symbol, n=n, adj="qfq", _df=True),
+                lambda: c.kline.bars(symbol, n=n, adj="qfq"),
                 label=f"{symbol}/kline(qfq)", meter_cb=_meter, warn_cb=warnings.append,
             )
         else:
             # demo supports n<=120, no adj, no begin/end
             kraw = call_with_retry(
-                lambda: c.kline.bars(symbol, n=min(n, 120), _df=True),
+                lambda: c.kline.bars(symbol, n=min(n, 120)),
                 label=f"{symbol}/kline(demo)", meter_cb=_meter, warn_cb=warnings.append,
             )
         requests += 1
@@ -287,7 +289,7 @@ def _fetch_one_symbol(
         mf_n = n if live else min(n, 30)
         try:
             mraw = call_with_retry(
-                lambda: c.moneyflow.bars(symbol, n=mf_n, _df=True),
+                lambda: c.moneyflow.bars(symbol, n=mf_n),
                 label=f"{symbol}/moneyflow", meter_cb=_meter, warn_cb=warnings.append,
             )
         except Exception as exc:
@@ -568,12 +570,12 @@ def _fetch_tail_one_symbol(
 
     # --- kline tail (hfq + raw) ---
     kadj = call_with_retry(
-        lambda: c.kline.bars(symbol, n=k, adj="hfq", _df=True),
+        lambda: c.kline.bars(symbol, n=k, adj="hfq"),
         label=f"{symbol}/kline-tail(adj)", meter_cb=_meter, warn_cb=warnings.append,
     )
     requests += 1
     kraw = call_with_retry(
-        lambda: c.kline.bars(symbol, n=k, adj=None, _df=True),
+        lambda: c.kline.bars(symbol, n=k, adj=None),
         label=f"{symbol}/kline-tail(raw)", meter_cb=_meter, warn_cb=warnings.append,
     )
     requests += 1
@@ -597,7 +599,7 @@ def _fetch_tail_one_symbol(
     # --- moneyflow tail ---
     if any(f in fields for f in config.MONEYFLOW_FIELDS):
         mraw = call_with_retry(
-            lambda: c.moneyflow.bars(symbol, n=k, _df=True),
+            lambda: c.moneyflow.bars(symbol, n=k),
             label=f"{symbol}/moneyflow-tail", meter_cb=_meter, warn_cb=warnings.append,
         )
         requests += 1
@@ -1068,12 +1070,17 @@ def fetch_cross_section(
         where_cond = where or config.CROSS_SECTION_WHERE
         # ONE request at the 10000-row hard cap - the universe (~5.7k) fits,
         # and offset pagination would re-materialize every column per page.
-        # Never paginate this path.
-        sdf = c.screener.query(
-            where=where_cond, fields=codes, limit=10000, offset=0,
-            idx=idx, _df=True
+        # Never paginate this path. 2.x: unified envelope {ok, as_of, data,
+        # meta} with the row DataFrame under data.rows.
+        env = c.screener.query(
+            where=where_cond, fields=codes, limit=10000, offset=0, idx=idx,
         )
         meter.requests += 1
+        sdf = (env.get("data") or {}).get("rows") if isinstance(env, dict) else env
+        if sdf is None:
+            raise normalize.NormalizeError(
+                "screener.query envelope missing data.rows (unexpected 2.x payload)"
+            )
         # EC accounting: the gateway surfaces cost via client.last_ec_cost
         # (response attrs do NOT carry it). This is the post-hoc ceiling's
         # EYES - without it max_ec is blind (measured: 621,399 EC slipped a

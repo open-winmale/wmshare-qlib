@@ -45,7 +45,7 @@ def main() -> None:
         ["SH600519", "SZ000858"],
         ["$close", "$pe", "$volume"],
         start_time="2026-10-01",
-        end_time="2026-10-30",
+        end_time="2026-11-16",
     )
     print("       D.features shape:", df.shape)
     print(df.tail(3).to_string())

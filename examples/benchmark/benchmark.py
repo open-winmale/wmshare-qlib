@@ -53,7 +53,7 @@ def reference_wmshare(symbols, n):
     client = wmshare.demo_client()
     out = {}
     for sym in symbols:
-        df = client.kline.bars(sym, n=n, _df=True)
+        df = client.kline.bars(sym, n=n)
         out[sym] = df[["date", "close"]].copy()
     return out
 

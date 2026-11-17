@@ -10,7 +10,7 @@ from pathlib import Path
 
 from wmshare_qlib import cross_section, fetch
 
-DAY = "2026-10-30"
+DAY = "2026-11-16"
 OUT = Path("out/score")
 
 
