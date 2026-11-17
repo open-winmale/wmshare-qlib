@@ -165,12 +165,12 @@ def measure_consistency(wmshare_frames, local_frames) -> dict:
         ldf = local_frames.get(sym)
         if ldf is None:
             continue
-        w = wdf.copy()
-        l = ldf.copy()
-        w["date"] = w["date"].astype(str).str[:10]
-        l["date"] = l["date"].astype(str).str[:10]
-        merged = w.merge(l, on="date", suffixes=("_w", "_l"), how="inner")
-        total += len(w)
+        wm_row = wdf.copy()
+        loc_row = ldf.copy()
+        wm_row["date"] = wm_row["date"].astype(str).str[:10]
+        loc_row["date"] = loc_row["date"].astype(str).str[:10]
+        merged = wm_row.merge(loc_row, on="date", suffixes=("_w", "_l"), how="inner")
+        total += len(wm_row)
         matched += len(merged)
         for _, r in merged.iterrows():
             lv = float(r["close_l"])
@@ -240,12 +240,12 @@ def measure_latency(symbols, n, fetcher) -> dict:
 
 def measure_code_size() -> dict:
     w = _count_loc(reference_wmshare)
-    l = _count_loc(reference_local)
+    loc_local = _count_loc(reference_local)
     return {
         "status": "ok",
         "wmshare_reference_loc": w,
-        "local_reference_loc": l,
-        "ratio": round(l / w, 2) if w else None,
+        "local_reference_loc": loc_local,
+        "ratio": round(loc_local / w, 2) if w else None,
         "note": "non-blank non-comment lines of the two reference functions in this file",
     }
 

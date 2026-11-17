@@ -29,7 +29,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-
 # Qlib feature expression config: use only fields we actually dumped.
 # Alpha158's default needs fields we may not have (e.g. $vwap); we build a small
 # explicit feature set from declared fields so the loop is honest and portable.
@@ -120,7 +119,6 @@ def run(qlib_dir: str) -> dict:
         f"field mismatch: {all_data.shape[1]} != {expected_cols} (phantom/missing column)"
     )
     features = all_data.iloc[:, : len(FEATURES)]
-    labels = all_data.iloc[:, len(FEATURES) :]
 
     # --- gate 2/3: one LightGBM fit/predict cycle on Qlib DatasetH output ---
     # We use Qlib's DataHandler/DatasetH to PREPARE the data (the layer under test),

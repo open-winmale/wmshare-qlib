@@ -7,7 +7,7 @@ name = "wmshare-qlib"
 version = "0.2.0"
 description = "Qlib-native data layer powered by wmshare (CN/HK precomputed factors)"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "BSD-3-Clause" }
 dependencies = [
     "wmshare>=1.22",
