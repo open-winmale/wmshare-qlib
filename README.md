@@ -152,6 +152,10 @@ that class of hole:
 - **Bulk/tail reconciliation.** Tail rows overlapping stored history must agree
   within float tolerance; an upstream history revision fails loud — history is
   never silently rewritten.
+- **Silent-truncation guard.** A native snapshot batch that omits tickets
+  without an error (wmshare `BatchResult.truncated`, e.g. suspended stocks
+  under a full-market shortcut) surfaces as an explicit warning naming the
+  missing codes — a ticket is never invisibly unscored or unchecked.
 - **Cold-start guard (layer ③).** `promote_to_panel` refuses below `--min-days`
   real days; a PIT series is available from its first captured day, never before.
 

@@ -819,6 +819,48 @@ def fetch_history_tail(
     return FetchResult(frame=panel, metering=meter, warnings=list(dict.fromkeys(warnings)))
 
 
+def _supports_fields(client: Any) -> bool:
+    """Whether the installed wmshare's snapshot facade accepts ``_fields=``.
+
+    ``_fields`` is an underscore client option (client-side column projection,
+    applied AFTER unit conversion) from the wmshare latest spec. wmshare's
+    COMPATIBILITY.md explicitly places "_"-prefixed client options OUTSIDE the
+    public-surface promise, so this adapter detects support from the signature
+    instead of gating on a version (the in-flight SDK still reports
+    ``__version__="2.1.0"``, so version gating would misfire both ways).
+    Unsupported SDKs get the unprojected call - identical data, wider dicts.
+    """
+    try:
+        import inspect
+
+        return "_fields" in inspect.signature(client.kline.snapshot).parameters
+    except (TypeError, ValueError, AttributeError):
+        return False
+
+
+def _snapshot_chunk_warnings(
+    snap: Any, chunk: list[str], warnings: list[str], label: str
+) -> None:
+    """Surface silent ticket omissions from a native snapshot batch.
+
+    ``BatchResult.truncated`` (wmshare latest): full-market shortcuts omit
+    suspended/non-member tickets WITHOUT an error - before the flag existed a
+    symbol missing from ``results`` simply never got scored/hygiene-checked,
+    invisibly. Diffs the request against THIS chunk's results so per-chunk
+    gaps stay attributable.
+    """
+    if not getattr(snap, "truncated", False):
+        return
+    got = getattr(snap, "results", None) or {}
+    missing = [s for s in chunk if s not in got]
+    if not missing:
+        return  # flagged but fully served: nothing to report
+    warnings.append(
+        f"{label}: server silently omitted {len(missing)} ticket(s) "
+        f"(truncated, e.g. {missing[:3]}) - results are a SUBSET of the request"
+    )
+
+
 def fetch_cross_section_snapshot(
     symbols: Iterable[str],
     *,
@@ -854,6 +896,8 @@ def fetch_cross_section_snapshot(
         anti-pitfall #5: never scored, never filled);
       * rows missing any metric value are DROPPED with a warning
         (anti-pitfall #5: a 0 z-score pretends "exactly average");
+      * silent server-side omissions (``BatchResult.truncated``) are reported
+        as a warning - a missing ticket is never silently scored-over;
       * ``max_ec`` REQUIRED (pre-flight ack), enforced post-hoc via
         ``client.last_ec_cost`` - the batch result itself does not carry EC.
     """
@@ -901,15 +945,29 @@ def fetch_cross_section_snapshot(
     # ~81-ticket single batches fail server-side, <=30-ticket chunks succeed).
     # EC is the SUM of per-chunk last_ec_cost readings (per-call semantics,
     # same pattern as the per-symbol meter).
+    #
+    # _fields adoption (wmshare latest spec, signature-gated - see
+    # _supports_fields): projects columns CLIENT-side after unit conversion.
+    # It does NOT lower EC (wmshare bills scanned materialized rows; only the
+    # response body narrows). The field set is a SUPERSET of everything the
+    # downstream loop touches (is_st/is_suspend + every metric code): the SDK
+    # projection raises UsageError on unknown fields, so omitting a needed
+    # column would fail loud - requesting extras is the safe direction.
+    fields_want = sorted({"is_st", "is_suspend"} | {m.code for m in metric_codes})
+    use_fields = _supports_fields(c)
     results: dict[str, dict] = {}
     n_requests = 0
     ec_total = 0.0
     has_meter = False
     for i in range(0, len(universe), config.SNAPSHOT_BATCH_CHUNK):
         chunk = universe[i:i + config.SNAPSHOT_BATCH_CHUNK]
-        snap = c.kline.snapshot(chunk)
+        snap = (c.kline.snapshot(chunk, _fields=fields_want)
+                if use_fields else c.kline.snapshot(chunk))
         n_requests += int(getattr(snap, "requests", 1) or 1)
         results.update(getattr(snap, "results", None) or {})
+        _snapshot_chunk_warnings(
+            snap, chunk, warnings,
+            label=f"chunk {i // config.SNAPSHOT_BATCH_CHUNK}")
         errs = getattr(snap, "errors", None) or {}
         if errs:
             warnings.append(f"{len(errs)} ticket(s) errored in chunk "
@@ -1035,7 +1093,14 @@ def filter_universe_hygiene(
         )
     if not universe:
         raise normalize.NormalizeError("no hygiene-checkable symbols left")
-    snap = client.kline.snapshot(universe)
+    # _fields adoption (signature-gated, see _supports_fields): the hygiene
+    # pass only touches is_st/is_suspend - projection narrows the response
+    # body client-side, EC unchanged.
+    if _supports_fields(client):
+        snap = client.kline.snapshot(universe, _fields=["is_st", "is_suspend"])
+    else:
+        snap = client.kline.snapshot(universe)
+    _snapshot_chunk_warnings(snap, list(universe), warnings, label="hygiene batch")
     ec = getattr(client, "last_ec_cost", None)
     meter = Metering(mode="live", requests=2,  # stocks.list + batch
                      ec_cost=float(ec) if ec is not None else None,

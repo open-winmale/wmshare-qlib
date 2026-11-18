@@ -228,3 +228,123 @@ def test_snapshot_chunks_large_universes():
     assert len(r.frame) == n
     # per-chunk readings SUMMED: 3 chunks x 2000
     assert r.metering.ec_cost == pytest.approx(6000.0)
+
+
+# --- wmshare latest-spec adoption: _fields projection + truncated guard ------
+class _ProjectingBatchResult:
+    """BatchResult-shaped with the latest-spec attributes (truncated flag)."""
+
+    def __init__(self, results: dict[str, dict], *, truncated: bool = False):
+        self.results = results
+        self.errors: dict[str, str] = {}
+        self.requests = 1
+        self.truncated = truncated
+
+
+class _FieldsKline:
+    """``snapshot(symbols, _fields=None)`` that CONSUMES ``_fields`` like the
+    SDK's project_fields (param-sensitive stub discipline: a stub that ignores
+    its arguments cannot detect a wrong projection request)."""
+
+    def __init__(self, results: dict[str, dict]):
+        self._results = results
+        self.requested_fields: list[list[str] | None] = []
+
+    def snapshot(self, symbols, _fields=None):
+        self.requested_fields.append(list(_fields) if _fields else None)
+        rows = {s: self._results[s] for s in symbols if s in self._results}
+        if _fields:
+            keep = set(_fields)
+            rows = {s: {k: v for k, v in row.items() if k in keep}
+                    for s, row in rows.items()}
+        return _ProjectingBatchResult(rows)
+
+
+class _FieldsClient:
+    def __init__(self, results: dict[str, dict], ec: float = 400.0):
+        self.kline = _FieldsKline(results)
+        self.stocks = _StubStocks()
+        self.last_ec_cost = ec
+
+
+def test_supports_fields_detector():
+    """Signature probe: latest-spec facades have ``_fields``, older ones do
+    not - and a client without kline degrades to False (no projection)."""
+    assert fetch._supports_fields(_FieldsClient(_default_results()))
+    assert not fetch._supports_fields(_StubClient(_default_results()))
+
+    class _NoKline:
+        pass
+
+    assert not fetch._supports_fields(_NoKline())
+
+
+def test_snapshot_projects_fields_when_supported():
+    """Latest-spec SDKs: the cross-section requests a SUPERSET of every field
+    downstream touches (is_st/is_suspend + all metric codes) and the projected
+    (narrow) results still produce identical scores. EC is unchanged either
+    way - projection only narrows the response body."""
+    client = _FieldsClient(_default_results(), ec=400.0)
+    r = fetch.fetch_cross_section_snapshot(
+        SYMS, live=True, as_of=DAY, client=client, max_ec=10_000,
+    )
+    assert client.kline.requested_fields, "projection kwarg must be sent"
+    want = {"is_st", "is_suspend", "chg_20d", "roi_1y", "ma60_up", "mv"}
+    assert set(client.kline.requested_fields[0]) == want
+    scores = r.frame.set_index("instrument")["score"]
+    assert set(scores.index) == {"SH600519", "SH601318", "SZ000858"}
+    assert scores["SH600519"] > scores["SH601318"] > scores["SZ000858"]
+    assert r.metering.ec_cost == pytest.approx(400.0)  # EC identical
+
+
+def test_snapshot_truncated_reports_silent_omissions():
+    """BatchResult.truncated (latest spec): server-side silent omissions must
+    surface as an explicit warning - before the flag existed a ticket missing
+    from results was simply never scored, invisibly."""
+    class _TruncKline(_FieldsKline):
+        def snapshot(self, symbols, _fields=None):
+            r = super().snapshot(symbols, _fields)
+            r.results.pop("000858", None)  # requested 4, served 3
+            r.truncated = True
+            return r
+
+    client = _FieldsClient(_default_results(), ec=400.0)
+    client.kline = _TruncKline(_default_results())
+    r = fetch.fetch_cross_section_snapshot(
+        SYMS, live=True, as_of=DAY, client=client, max_ec=10_000,
+    )
+    assert any("silently omitted" in w and "SUBSET" in w for w in r.warnings), r.warnings
+    assert "SZ000858" not in set(r.frame["instrument"])
+
+
+def test_hygiene_projects_fields_and_warns_truncated():
+    """Hygiene pass: projects to exactly is_st/is_suspend and surfaces the
+    truncation warning with the omitted ticket named."""
+    flags = {"600519": {"is_st": False, "is_suspend": False},
+             "000858": {"is_st": False, "is_suspend": True},
+             "601318": {"is_st": True, "is_suspend": False}}
+
+    class _HygKline:
+        def __init__(self):
+            self.requested: list[list[str] | None] = []
+
+        def snapshot(self, symbols, _fields=None):
+            self.requested.append(list(_fields) if _fields else None)
+            rows = {s: dict(flags.get(s, {})) for s in symbols if s != "601318"}
+            if _fields:
+                keep = set(_fields)
+                rows = {s: {k: v for k, v in row.items() if k in keep}
+                        for s, row in rows.items()}
+            return _ProjectingBatchResult(rows, truncated=True)
+
+    kline = _HygKline()
+    client = type("C", (), {"kline": kline, "stocks": _StubStocks(),
+                            "last_ec_cost": 400.0})()
+    r = fetch.filter_universe_hygiene(
+        ["600519", "000858", "601318"], client=client,
+        exclude_st=True, exclude_suspended=True, max_ec=10_000,
+    )
+    assert kline.requested and kline.requested[0] == ["is_st", "is_suspend"]
+    assert any("silently omitted" in w and "601318" in w for w in r.warnings)
+    # kept only the clean-and-served ticket; 000858 suspended, 601318 omitted
+    assert r.frame["instrument"].tolist() == ["SH600519"]
