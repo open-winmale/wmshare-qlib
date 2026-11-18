@@ -175,6 +175,40 @@ def test_snapshot_universe_intersected_with_stocks_list():
     assert "999999" not in r.frame["instrument"].str.slice(2).tolist()
 
 
+# --- contract check against the REAL installed SDK (zero EC) -----------------
+def test_real_sdk_exposes_fields_and_truncated():
+    """Pin the actual upstream contract we rely on (wmshare >= 2.2.0), not a
+    stub: a future SDK that drops ``_fields``/``truncated`` must turn this red
+    instead of silently degrading to the fallback branch forever."""
+    import wmshare
+    from wmshare.client import BatchResult
+
+    assert "truncated" in BatchResult.__dataclass_fields__
+    client = wmshare.demo_client()
+    assert fetch._supports_fields(client) is True
+    # the real facade accepts the kwarg and projects (single-symbol path)
+    row = client.kline.snapshot("600519", _fields=["close", "is_st"])
+    assert set(row) == {"close", "is_st"}
+
+
+def test_real_sdk_demo_batch_projection_is_tolerated():
+    """KNOWN upstream gap (wmshare 2.2.0): the demo client's BATCH snapshot
+    path drops ``_fields`` on the floor (only the single-symbol path projects)
+    while live projects correctly - signatures align, semantics do not.
+    The adapter must be indifferent either way: columns are always read by
+    key, never positionally, so a full-width dict is just as correct. This
+    test asserts the TOLERANCE only - deliberately not the gap, so an
+    upstream fix never turns it red."""
+    import wmshare
+
+    client = wmshare.demo_client()
+    snap = client.kline.snapshot(["600519", "000858", "601318"],
+                                 _fields=["close"])
+    first = next(iter(snap.results.values()))
+    # adapter semantics: keyed access, so width does not matter
+    assert "close" in first
+
+
 # --- CLI guard rails (fire BEFORE any network/EC) ----------------------------
 def test_cli_snapshot_requires_symbols():
     with pytest.raises(SystemExit, match="--symbols"):

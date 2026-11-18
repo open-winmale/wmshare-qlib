@@ -823,12 +823,12 @@ def _supports_fields(client: Any) -> bool:
     """Whether the installed wmshare's snapshot facade accepts ``_fields=``.
 
     ``_fields`` is an underscore client option (client-side column projection,
-    applied AFTER unit conversion) from the wmshare latest spec. wmshare's
+    applied AFTER unit conversion) shipped in wmshare 2.2.0. wmshare's
     COMPATIBILITY.md explicitly places "_"-prefixed client options OUTSIDE the
-    public-surface promise, so this adapter detects support from the signature
-    instead of gating on a version (the in-flight SDK still reports
-    ``__version__="2.1.0"``, so version gating would misfire both ways).
-    Unsupported SDKs get the unprojected call - identical data, wider dicts.
+    public-surface promise (they may change in any MINOR), so this adapter
+    detects support from the signature instead of gating on a version - a
+    future SDK dropping the kwarg degrades to the unprojected call instead of
+    crashing. Unsupported SDKs get identical data, wider dicts.
     """
     try:
         import inspect

@@ -23,12 +23,11 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      # wmshare 2.1.0 from PyPI (the daily_basic facade's upstream). The
-      # adapter's latest-spec adoptions (_fields projection, truncated flag)
-      # are signature-gated, so 2.1.0 exercises the fallback paths here; the
-      # gated paths are covered by unit-test stubs.
+      # wmshare 2.2.0 from PyPI: the daily_basic facade, _fields client-side
+      # projection and BatchResult.truncated all ship there, so CI exercises
+      # the REAL adopted paths (not just the signature-fallback branch).
       - name: Install wmshare (PyPI, 2.x floor)
-        run: pip install "wmshare>=2.1.0,<3"
+        run: pip install "wmshare>=2.2.0,<3"
 
       - name: Install package + test deps
         run: pip install -e '.[test]'
@@ -53,7 +52,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install wmshare (PyPI, 2.x floor)
-        run: pip install "wmshare>=2.1.0,<3"
+        run: pip install "wmshare>=2.2.0,<3"
 
       - name: Install package + pyqlib + pytest (needs numpy<2)
         run: pip install -e '.[qlib,test]' "numpy<2"

@@ -111,7 +111,7 @@ roadmap §2.5). They are estimates — the paid `metering.ec_cost` is the only r
 | `kline.batch_live` | ≈ `45 EC/票` (daily OHLCV; percent/ex-div semantics unverified — not used) |
 | `screener.query` | full market × 4 light columns = **204,430 EC**; small-limit probes do NOT predict full-universe cost |
 | `valuation.daily_basic` | bills by rows scanned (NOT cached): filtered read ≈ **2,038 EC**, full-history ≈ **18,317 EC**, incremental cadence ≈ **312 EC/票/日** (measured 2026-11-18, prod) |
-| range queries (`begin/end`) | force-pay `max_limit` (500 bars) — measured 33,656 EC for a ~60-bar window; never use for increments |
+| range queries (`begin/end`) | force-pay `max_limit` (500 bars) — measured 33,656 EC for a ~60-bar window; never use for increments. **Note:** wmshare 2.2.0 adds anchor-paginated range reads (upstream says billed ≈ actual rows) — NOT yet measured here; re-probe queued before relying on it |
 
 Every fetch result carries `metering` (`requests`, `ec_cost`, `note`) written to
 `fetch_meta.json` / `*.meta.json`; demo mode has no EC meter and says so explicitly.
