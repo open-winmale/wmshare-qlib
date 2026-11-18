@@ -55,8 +55,8 @@ jobs:
       - name: Install wmshare (PyPI, 2.x floor)
         run: pip install "wmshare>=2.1.0,<3"
 
-      - name: Install package + pyqlib (needs numpy<2)
-        run: pip install -e '.[qlib]' "numpy<2"
+      - name: Install package + pyqlib + pytest (needs numpy<2)
+        run: pip install -e '.[qlib,test]' "numpy<2"
 
       - name: Tier-2 Qlib read-back (non-blocking)
         run: PYTHONPATH=src python -m pytest tests -q -m qlib
