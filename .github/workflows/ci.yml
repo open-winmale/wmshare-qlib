@@ -1,6 +1,7 @@
-# P1-3 CI: Tier-1 tests only (zero Qlib, zero credentials, zero EC).
-# Tier-2 (pyqlib read-back) stays a local optional cross-check: the vendored
-# .qlibvendor is a local convenience and the pyqlib wheel is not a runtime dep.
+# CI: Tier-1 tests on every push/PR (zero Qlib, zero credentials, zero EC).
+# Tier-2 (pyqlib read-back) runs as a SEPARATE NON-BLOCKING job: the pyqlib
+# wheel is notoriously picky to install (needs numpy<2), so a red tier2 job
+# reports honestly in Actions history without blocking merges.
 name: CI
 
 on:
@@ -22,11 +23,12 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      # wmshare lives in its own public repo (not on PyPI yet); pinned to a
-      # stable upstream tag so API drift on their main cannot break our CI.
-      # 2.0.1 (not 2.0.0): demo snapshot re-shot + cost_estimate fix.
-      - name: Install wmshare (upstream repo, pinned tag)
-        run: pip install "wmshare @ git+https://github.com/open-winmale/wmshare.git@v2.0.1"
+      # wmshare 2.1.0 from PyPI (the daily_basic facade's upstream). The
+      # adapter's latest-spec adoptions (_fields projection, truncated flag)
+      # are signature-gated, so 2.1.0 exercises the fallback paths here; the
+      # gated paths are covered by unit-test stubs.
+      - name: Install wmshare (PyPI, 2.x floor)
+        run: pip install "wmshare>=2.1.0,<3"
 
       - name: Install package + test deps
         run: pip install -e '.[test]'
@@ -38,3 +40,23 @@ jobs:
 
       - name: Tier-1 tests (no Qlib, no live/EC)
         run: PYTHONPATH=src python -m pytest tests -q -m "not live"
+
+  tier2:
+    # NON-BLOCKING pyqlib read-back (single version - see header comment).
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install wmshare (PyPI, 2.x floor)
+        run: pip install "wmshare>=2.1.0,<3"
+
+      - name: Install package + pyqlib (needs numpy<2)
+        run: pip install -e '.[qlib]' "numpy<2"
+
+      - name: Tier-2 Qlib read-back (non-blocking)
+        run: PYTHONPATH=src python -m pytest tests -q -m qlib
