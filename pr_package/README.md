@@ -20,7 +20,9 @@
   定义 `XxxCollector(BaseCollector)` / `XxxNormalize(BaseNormalize)` / `Run(BaseRun)` 三个类；
   `sys.path.append(str(CUR_DIR.parent.parent))` 以解析 `data_collector.base` 导入。
 - 同 README：**Features[Price/Volume]、Calendar、Instruments 必需；未复权则 factor=1**。
-  本项目 wmshare 路径用前复权价 + `factor=1`（`qfq_const`），与该规则一致。
+  本项目 wmshare 路径用后复权价 + 真 `factor = hfq/raw` 列（live 默认
+  `hfq_factor`，与 Qlib「factor = adjusted/raw」自身约定一致）；`factor=1`
+  规则仅适用于无复权源（demo 仍 qfq_const）。
 - `scripts/data_collector/base.py`：`BaseRun` 抽象方法为
   `collector_class_name` / `normalize_class_name` / `default_base_dir`。
 - `scripts/data_collector/yahoo/collector.py`：真实 CLI 入口是 `fire.Fire(Run)`。
@@ -50,7 +52,8 @@ Title: [Data Collector] Add wmshare A-share/HK collector
 
 Summary:
 - Adds a data_collector module sourcing CN/HK OHLCV + valuation from wmshare SDK.
-- Emits Qlib-native .bin panel with factor=1 (pre-adjusted qfq convention).
+- Emits a Qlib-native .bin panel with the REAL ``factor = hfq/raw`` column
+  (back-adjusted prices, Qlib's own adjusted-price convention).
 - Follows the 3-class structure in scripts/data_collector/README.md.
 
 Motivation:

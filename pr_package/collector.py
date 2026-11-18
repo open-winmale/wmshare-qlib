@@ -13,9 +13,10 @@ This follows the REAL structure documented in microsoft/qlib's
     ``CUR_DIR.parent.parent`` to sys.path so the import resolves when the
     package sits at scripts/data_collector/<name>/.
   - Qlib requires Features[Price/Volume], Calendar, Instruments; if prices
-    are NOT adjusted, ``factor=1`` (README's explicit rule). Our wmshare
-    path emits pre-adjusted qfq prices with factor=1 (qfq_const), matching
-    that rule exactly.
+    are NOT adjusted, ``factor=1`` (README's explicit rule). Our wmshare path
+    emits back-adjusted (hfq) prices WITH the real ``factor = hfq/raw``
+    column (live default 'hfq_factor') - Qlib's own adjusted-price convention;
+    ``factor=1`` only applies to an unadjusted source.
 
 Why this is material and not a drop-in PR:
   - It depends on wmshare (an external SDK), so upstream must first decide
@@ -49,8 +50,13 @@ class WmshareCollector(BaseCollector):
     def get_data(self, symbol: str, start_datetime=None, end_datetime=None, **kwargs):
         from wmshare_qlib import fetch  # optional dependency, declared in PR
 
+        # Real signature (fetch.py): n = bars per symbol, max_workers = fetch
+        # concurrency - NOT the collector's worker count. Pass n through the
+        # requested window; the panel already carries hfq prices + the real
+        # factor column (live default 'hfq_factor').
+        days = kwargs.pop("n", 120)
         result = fetch.fetch_history_panel(
-            [symbol], n=self.max_workers, client=None  # real code passes n=days
+            [symbol], n=days, client=None, max_workers=1,
         )
         return result.frame
 
@@ -63,7 +69,13 @@ class WmshareCollector(BaseCollector):
 
 
 class WmshareNormalize(BaseNormalize):
-    """Sort to Qlib's ascending-date convention; enforce factor=1 for qfq."""
+    """Sort to Qlib's ascending-date convention; keep the REAL factor column.
+
+    wmshare-qlib's live default is 'hfq_factor': prices are back-adjusted
+    (IPO-anchored) and ``factor = hfq/raw`` is a real per-date column - Qlib's
+    own convention (factor = adjusted/raw). Only when a source truly lacks
+    adjustment does the collector README's ``factor=1`` rule apply.
+    """
 
     def __init__(self, date_field_name="date", symbol_field_name="symbol", **kwargs):
         super().__init__(
@@ -74,9 +86,11 @@ class WmshareNormalize(BaseNormalize):
 
     def normalize(self, df):
         df = df.sort_values([self.symbol_field_name, self.date_field_name])
-        if "factor" in df.columns:
-            # qfq_const convention: pre-adjusted prices, factor is always 1.
+        if "factor" not in df.columns:
+            # Unadjusted source: Qlib collector README's explicit rule.
             df["factor"] = 1.0
+        # factor present -> pass through verbatim; never overwrite a real
+        # hfq factor with 1.0 (that would break Qlib's adjusted-price math).
         return df
 
 
