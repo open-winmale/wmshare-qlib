@@ -139,6 +139,11 @@ EC_SCREENER_FULL_UNIVERSE = 204430.0  # measured: full market x 4 light columns
 #   full-history read (726 docs x all 8 fields) = 18,317 EC
 # metering.ec_cost stays the only real quote.
 EC_DAILY_BASIC = 2038.0
+# Incremental daily cadence (measured 2026-11-18, prod DAG summary): one
+# symbol/day = HIST_STATS("6m") latest + ITER snapshot = 312 EC/symbol/day
+# (sample group 300 symbols ~= 93.6k EC/day; full market 5.7k ~= 1.78M EC/day
+# - re-budget before expanding beyond the sample group).
+EC_DAILY_BASIC_INCREMENTAL = 312.0
 
 # Operational cap measured live (2026-11-17): a single kline.snapshot batch
 # over ~81 tickets failed (server-side eval/timeout), while <=30-ticket
