@@ -70,6 +70,7 @@ def cmd_dump_history(args: argparse.Namespace) -> None:
         per = estimate.bulk_symbol(
             args.n, live=bool(args.live), adjust_mode=adjust_mode,
             valuation_metrics=metrics,
+            daily_basic=bool(getattr(args, "daily_basic", False)),
         )
         print("[dry-run]", json.dumps({
             "dry_run": True,

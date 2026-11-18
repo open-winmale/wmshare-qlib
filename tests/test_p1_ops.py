@@ -158,6 +158,31 @@ def test_estimator_formulas_match_measured_anchors():
     assert estimate.snapshot_batch(300) == pytest.approx(66.0 + 300 * 100.0)
 
 
+def test_estimator_daily_basic_and_margin_anchors():
+    """Probed 2026-11-18: daily_basic floor 1,707 + ~23/doc; margin ~124/row."""
+    assert estimate.daily_basic_read(0) == pytest.approx(config.EC_DAILY_BASIC_FLOOR)
+    # fitted model brackets both production measurements (1,707 / 18,317)
+    assert estimate.daily_basic_read(1) < 2_000
+    assert estimate.daily_basic_read(726) == pytest.approx(18_317, abs=250)
+    assert estimate.margin_query(20) == pytest.approx(2_472, abs=10)
+
+    # bulk_symbol: --daily-basic adds exactly one read for the requested bars
+    base = estimate.bulk_symbol(60, live=True, adjust_mode="hfq_factor",
+                                valuation_metrics=4)
+    with_db = estimate.bulk_symbol(60, live=True, adjust_mode="hfq_factor",
+                                   valuation_metrics=4, daily_basic=True)
+    assert with_db - base == pytest.approx(estimate.daily_basic_read(60))
+
+
+def test_range_query_anchor_matches_nmode_window():
+    """Range reads still bill the whole anchor window (re-probed on 2.2.0:
+    49 returned rows paid 33,688 EC). Keep the constant consistent with the
+    n-mode 500-bar call so nobody re-adopts range queries for increments."""
+    assert config.EC_KLINE_RANGE_WINDOW == 500
+    assert config.EC_KLINE_RANGE_CALL == pytest.approx(
+        config.EC_KLINE_BASE + config.EC_KLINE_PER_BAR * 500, abs=40)
+
+
 # --- --dry-run quotes ---------------------------------------------------------
 def test_dry_run_dump_history_quotes_without_store_or_request(tmp_path, capsys):
     out_dir = tmp_path / "out"

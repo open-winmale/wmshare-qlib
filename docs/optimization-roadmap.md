@@ -322,8 +322,22 @@ storage v1.0.163 → kernel/analysis v1.5.440 → winmale 20261118110034-7233802
    EC=300/3 票（≈100 EC/票，与既有锚一致）。
    上游已知小缺口（已记录，不影响本仓）：demo 客户端**批量**路径忽略
    `_fields`（单票路径正常投影），live 批量正常——签名对齐、语义未对齐；
-   本仓按 key 读取故无感。2.2.0 区间锚点分页的计费**未 probe**，
-   README EC 表已加诚实注记（re-probe 前不按旧锚承诺新成本数字）。
+   本仓按 key 读取故无感。
+10. ~~**2.2.0 锚点分页计费 re-probe（P1 成本重锚）**~~ ✅ **已实测（2026-11-18）**：
+   探针总耗 39,900 EC（用户批准 25k + 追加 8k 补测）。关键结论：
+   - **区间查询仍按锚点窗口计费，不按返回行数**：49 个交易日窗口返回 49 行，
+     实付 **33,688 EC**（= 156 + 67×500，与旧锚 33,656 一致）。2.2.0 分页解决
+     的是**完整性**（任意跨度不静默截断），不是短窗口成本——故**放弃**
+     「stale gap 用 begin/end 补拉」方案（33.7k vs n=60 的 4.2k，反向优化）；
+   - `margin.query(limit=20)` = **2,472 EC**（≈124 EC/行），`margin.latest` =
+     **182 EC**（SDK 此前对这两个接口无成本模型）；roadmap P2-2 两融进 .bin
+     可按此定额；
+   - `valuation.daily_basic` 读地板 = **1,707 EC**（1 日 × 1 字段），同日 8 字段
+     仅 1,851 EC（字段几乎不加价、扫描才是成本），拟合 floor + ≈23 EC/doc；
+     再次确认**非缓存**（SDK 的 `cache_hit 4~200` 档位错误，P3 补丁修正）。
+   落地：`config.EC_*` 新增实测锚（区间窗口/margin/daily_basic floor+per-doc）；
+   `estimate.daily_basic_read` / `margin_query` 新增，`--daily-basic --dry-run`
+   现计入读数成本；README EC 表区间行改写为实测结论。
 
 ## 六、明确不做（延续 README 红线）
 

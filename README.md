@@ -110,8 +110,9 @@ roadmap §2.5). They are estimates — the paid `metering.ec_cost` is the only r
 | `kline.snapshot` batch | ≈ `66–100 EC/票` (client-side chunks of 30; N=81 measured 66.2) |
 | `kline.batch_live` | ≈ `45 EC/票` (daily OHLCV; percent/ex-div semantics unverified — not used) |
 | `screener.query` | full market × 4 light columns = **204,430 EC**; small-limit probes do NOT predict full-universe cost |
-| `valuation.daily_basic` | bills by rows scanned (NOT cached): filtered read ≈ **2,038 EC**, full-history ≈ **18,317 EC**, incremental cadence ≈ **312 EC/票/日** (measured 2026-11-18, prod) |
-| range queries (`begin/end`) | force-pay `max_limit` (500 bars) — measured 33,656 EC for a ~60-bar window; never use for increments. **Note:** wmshare 2.2.0 adds anchor-paginated range reads (upstream says billed ≈ actual rows) — NOT yet measured here; re-probe queued before relying on it |
+| `valuation.daily_basic` | bills by rows scanned (NOT cached): 1-day floor ≈ **1,707 EC**, 13-day/2-field ≈ **2,038 EC**, full history ≈ **18,317 EC**, incremental cadence ≈ **312 EC/票/日** (all measured 2026-11-18, prod) |
+| `margin.query` / `margin.latest` | ≈ **124 EC/行** (20 rows = 2,472 EC) / **182 EC** for the one-row read (measured 2026-11-18; the SDK has no model for these) |
+| range queries (`begin/end`) | **still force-pay the anchor WINDOW, not the returned rows** — re-probed on wmshare 2.2.0 (2026-11-18): a 49-trading-day kline window returned 49 rows but paid **33,688 EC** (= 156 + 67×500). 2.2.0 pagination lifts completeness limits (any span, no silent truncation), NOT short-window cost — never use for increments |
 
 Every fetch result carries `metering` (`requests`, `ec_cost`, `note`) written to
 `fetch_meta.json` / `*.meta.json`; demo mode has no EC meter and says so explicitly.

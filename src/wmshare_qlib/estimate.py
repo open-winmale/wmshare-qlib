@@ -32,11 +32,14 @@ def bulk_symbol(
     adjust_mode: str,
     valuation_metrics: int,
     moneyflow: bool = True,
+    daily_basic: bool = False,
 ) -> float:
     """One symbol in a bulk ``dump-history`` run.
 
     live hfq_factor: kline twice (adj + raw). live qfq_const: once.
     demo: one kline (n clamped to 120 by the fetch layer), pe-only valuation.
+    ``daily_basic`` adds the materialized-table read (floor + per-doc, fitted
+    on the 2026-11-18 probes; not a cache hit).
     """
     pulls = 1
     if live and adjust_mode == "hfq_factor":
@@ -47,7 +50,24 @@ def bulk_symbol(
         est += valuation_refresh(valuation_metrics)
     if moneyflow:
         est += moneyflow_call(min(n, 30) if not live else n)
+    if daily_basic:
+        est += daily_basic_read(n_eff)
     return est
+
+
+def daily_basic_read(n_docs: int) -> float:
+    """One ``valuation.daily_basic`` read (measured 2026-11-18, NOT cached).
+
+    Fitted between the 1-day floor (1,707 EC) and the full-history read
+    (18,317 EC / 726 docs): floor + ~23 EC/doc. The paid ``metering.ec_cost``
+    stays the only real quote.
+    """
+    return config.EC_DAILY_BASIC_FLOOR + config.EC_DAILY_BASIC_PER_DOC * max(0, int(n_docs))
+
+
+def margin_query(n_rows: int) -> float:
+    """``margin.query`` (the SDK has no model; measured ~124 EC/row)."""
+    return config.EC_MARGIN_PER_ROW * max(0, int(n_rows))
 
 
 def tail_symbol(k: int, *, valuation_due: bool, valuation_metrics: int = 4,

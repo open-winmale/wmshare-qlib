@@ -133,6 +133,15 @@ EC_VALUATION_PER_METRIC = 712.0  # hist_stats 3y window, per metric (pe/pb/ps/pr
 EC_SNAPSHOT_PER_TICKET = 100.0   # kline.snapshot batch, N=3 measured (~58 at scale)
 EC_STOCKS_LIST = 66.0            # whole universe, one call
 EC_SCREENER_FULL_UNIVERSE = 204430.0  # measured: full market x 4 light columns
+# RANGE QUERIES still bill the whole anchor WINDOW, not the returned rows
+# (re-probed 2026-11-18 on wmshare 2.2.0 anchor pagination): a 49-trading-day
+# kline window returned 49 rows but paid 33,688 EC = 156 + 67 x 500 (the SDK
+# slices at max_limit=500 and the server materializes the full window). The
+# 2.2.0 pagination lifts the COMPLETENESS constraints (any span, no silent
+# truncation), NOT the short-window cost. Never use begin/end for increments;
+# the measured anchor below keeps that decision auditable.
+EC_KLINE_RANGE_WINDOW = 500      # bars per anchor window
+EC_KLINE_RANGE_CALL = 33688.0    # measured: 49-row window, 2026-11-18
 # daily_basic (LIVE 2026-11-18): NOT cached — bills by rows scanned.
 # Measured in production (winmale 20261118110034 release window):
 #   filtered read (13 trading days x 2 fields)  = 2,038 EC
@@ -144,6 +153,18 @@ EC_DAILY_BASIC = 2038.0
 # (sample group 300 symbols ~= 93.6k EC/day; full market 5.7k ~= 1.78M EC/day
 # - re-budget before expanding beyond the sample group).
 EC_DAILY_BASIC_INCREMENTAL = 312.0
+# Read floor (probed 2026-11-18): a single-day, single-field read still pays
+# 1,707 EC; 1 day x 8 fields = 1,851 (fields are nearly free, the scan is
+# not). Model for the --dry-run quote: floor + ~23 EC/doc, fitted between
+# 1 day (1,707) and 726 docs x 8 fields (18,317). NOT a cache hit.
+EC_DAILY_BASIC_FLOOR = 1707.0
+EC_DAILY_BASIC_PER_DOC = 23.0
+# margin pricing (probed 2026-11-18; the SDK has NO model for these):
+#   margin.query(limit=20) = 2,472 EC (20 rows, ~124 EC/row)
+#   margin.latest         = 182 EC (one row)
+# Roadmap P2-2 (两融进 .bin) is sized from these anchors.
+EC_MARGIN_PER_ROW = 124.0
+EC_MARGIN_LATEST = 182.0
 
 # Operational cap measured live (2026-11-17): a single kline.snapshot batch
 # over ~81 tickets failed (server-side eval/timeout), while <=30-ticket
