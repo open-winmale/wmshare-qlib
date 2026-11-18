@@ -257,9 +257,22 @@ P1-1 universe 文件（write-universe：indices.members 真实源 + 卫生前置
         ↓
 P1-2 深历史（--years N，单次调用放大 cap，外推标注）✅ 已实现（2026-11-17）
         ↓
+daily_basic 上游落地 + 消费端 ✅（2026-11-18 生产上线：--daily-basic 门控 +
+Gate B reconcile-daily-basic；读 EC 实测 2,038/18,317 EC 已入 README EC 表）
+        ↓
 P2 上游 PR / HK / 基准卡 ← 下一步（所有 P0/P1 实现项已落地；
         live 验证批：hfq 链路 ~7.5k + snapshot N=300 ~30k + indices probe，待所有者点头）
 ```
+
+### 2026-11-18 daily_basic 上线纪要（上游六层全通）
+
+storage v1.0.163 → kernel/analysis v1.5.440 → winmale 20261118110034-7233802
+→ script 9eb2cb9d → wmshare 2.1.0（PyPI+MCP registry）→ 本仓 0.3.0。
+生产验证：600519 门 A 值 22.179009201538978@2026-11-17 经 SDK 全链复现；
+样本组 hs300=300 票 dry_run 绿。读 EC 实测（非 cached）已入 README EC 表与
+方案 §9。卫生窗待办（非阻塞）：meta/less/legends pin 拉齐 + less 二进制
+重部署 + dbtool 白名单补 valuation_daily + SDK estimate_cost daily_basic
+档注记同步实测 EC。
 
 ## 五、probe 假设跟踪（2026-11-17 更新）
 

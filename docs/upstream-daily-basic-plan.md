@@ -163,17 +163,31 @@ airflow（buyback 同款：拉数 → raw 文档 → `do_clean_data` 入库 → 
 
 | 期 | 内容 | 验收 |
 |---|---|---|
-| P0 样本组 | hs300 样本 100 票：全字段物化 + 全历史回填 + 端点上线 | 门 A 100%；门 B（层③已有天数）通过；单票 fuel 入预算表；连续 10 个交易日 SLA 达成（17:00 前） |
+| P0 样本组 | hs300 样本：全字段物化 + 全历史回填 + 端点上线 | **进行中（2026-11-18）**：端点已上线（读全通）；600519 全链验证绿（增量+3y 回填 726 docs、门 A 单点全精度一致、无伪 0）；universe 解析 300 票绿；待 daily unpause 后连续 10 交易日 SLA 达成 |
 | P1 扩全市场 | ~5.7k 票复用同一 DAG | P0 三条扩容判据全绿后执行；分组错峰 + freshness guard 全量覆盖 |
 | P2（可选） | screener 历史索引 as-of 截面（按日期查历史物化索引） | — |
 
 ## 8. 各仓改动锚点清单（评审排期后执行）
 
-> **落地记录（2026-11-18）**：下表全部行已实现并通过闭环验证。实现态与设计的
-> 两处偏差（均为设计内演化）：① kernel `normalizeReadSymbol` keep-prefix 分支
-> 加了 `CatAltValuationDaily` 一行（mapping.go 头部的 SYNC 纪律本就要求
-> kernel/analysis 同步比对，属注册表数据行，非逻辑）；② SDK `fields` 参数定稿
-> 为 ARR（合同测试样例值语义），XS/门面/inventory 三处一致。
+> **落地记录（2026-11-18，已上线）**：下表全部行已实现并经生产闭环验证。
+> 最终提交链：storage `4481e92`+`1065e1a`（tag v1.0.163）→ kernel/analysis
+> `3f988fd`+`8a27fb5`（tag v1.5.440）→ winmale `7233802`（prod release
+> 20261118110034-7233802）→ script `b90b0ff6`+`cb93134b`+`9eb2cb9d` →
+> airflow `5f4f60be`+`78bac655` → wmshare `2c89c41`+`95f1e63`（v2.1.0，PyPI+
+> MCP）→ 本仓 `e2161e5`+`271a036`（v0.3.0）。
+> 实现态与设计的偏差（均为设计内演化，逐条留痕）：
+> ① kernel `normalizeReadSymbol` keep-prefix 加 `CatAltValuationDaily`
+>   （mapping.go 头部 SYNC 纪律要求的注册表数据行）；
+> ② SDK `fields` 参数定稿为 ARR（合同测试样例语义），XS/门面/inventory 一致；
+> ③ **表实态为 V2-only**：airflow `storage_write_upsert` 对有映射业务表只写
+>   V2，V1 `cn/valuation_daily` 恒空——故 storage Go 侧 helper/唯一索引
+>   （statement.* 布局）当前无实际写入者；生产唯一索引按 alt_bonus 约定建在
+>   V2 集合（`uk_symbol_catalog_ts` unique on {catalog,symbol,ts}，ops 建于
+>   2026-11-18），Go 侧索引收编 v2tool 留卫生窗；
+> ④ script 投影按 LIST 型文档实态（行在 `r.list[]`、日期 `r.reportDate`），
+>   `9eb2cb9d` 修正；
+> ⑤ **读 EC 实测证伪 §6 cached_eval 假设**：全量 18,317 / 过滤 2,038 EC/次
+>   （见 §9），消费预算与 SDK estimate_cost 注记按此修订。
 
 | 仓 | 文件 | 动作 | 底层？ |
 |---|---|---|---|

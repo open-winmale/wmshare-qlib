@@ -133,10 +133,12 @@ EC_VALUATION_PER_METRIC = 712.0  # hist_stats 3y window, per metric (pe/pb/ps/pr
 EC_SNAPSHOT_PER_TICKET = 100.0   # kline.snapshot batch, N=3 measured (~58 at scale)
 EC_STOCKS_LIST = 66.0            # whole universe, one call
 EC_SCREENER_FULL_UNIVERSE = 204430.0  # measured: full market x 4 light columns
-# daily_basic (upstream-gated): cached_eval family - the SDK's estimate_cost
-# quotes ~4 EC per cached series read (hist_stats anchor). ESTIMATE, not a
-# probe; metering.ec_cost stays the only real quote.
-EC_DAILY_BASIC = 4.0
+# daily_basic (LIVE 2026-11-18): NOT cached — bills by rows scanned.
+# Measured in production (winmale 20261118110034 release window):
+#   filtered read (13 trading days x 2 fields)  = 2,038 EC
+#   full-history read (726 docs x all 8 fields) = 18,317 EC
+# metering.ec_cost stays the only real quote.
+EC_DAILY_BASIC = 2038.0
 
 # Operational cap measured live (2026-11-17): a single kline.snapshot batch
 # over ~81 tickets failed (server-side eval/timeout), while <=30-ticket

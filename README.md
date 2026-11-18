@@ -13,11 +13,14 @@ Status: Phase 1 MVP, closed-loop validated; forward plan in
 > **Data availability comes in three tiers — only the first is backtestable today.**
 > 1. **Real history** — kline (OHLCV+amount), moneyflow, PE/PB/PS/PR (≤3y, server
 >    cap): dumped as Qlib `.bin`, backtestable immediately. Plus the
->    **upstream-gated `daily_basic` fields** (`pe_ttm/total_mv/circ_mv/
+>    **upstream `daily_basic` fields** (`pe_ttm/total_mv/circ_mv/
 >    turnover_rate/dv_ttm`) via `--daily-basic` — the server-side materialized
 >    table (plan: [docs/upstream-daily-basic-plan.md](docs/upstream-daily-basic-plan.md))
->    is implemented end-to-end but not yet serving; until it ships the flag
->    degrades to an explicit skip warning and the panel is unchanged.
+>    **is LIVE since 2026-11-18** (600519 verified end-to-end; sample group
+>    hs300, daily cadence ramps after sample acceptance). Reads bill by rows
+>    scanned (measured: filtered read ≈2,038 EC, full-history ≈18,317 EC per
+>    symbol) — see the EC table. If upstream is unreachable the flag degrades
+>    to an explicit skip warning and the panel is unchanged.
 > 2. **Today only** — wmshare's 2,752 precomputed metric codes expose a CURRENT
 >    value and have NO history-series endpoint (verified against the SDK's
 >    screener/indicator surface, which accepts no date parameters). They are
@@ -107,6 +110,7 @@ roadmap §2.5). They are estimates — the paid `metering.ec_cost` is the only r
 | `kline.snapshot` batch | ≈ `66–100 EC/票` (client-side chunks of 30; N=81 measured 66.2) |
 | `kline.batch_live` | ≈ `45 EC/票` (daily OHLCV; percent/ex-div semantics unverified — not used) |
 | `screener.query` | full market × 4 light columns = **204,430 EC**; small-limit probes do NOT predict full-universe cost |
+| `valuation.daily_basic` | bills by rows scanned (NOT cached): filtered read ≈ **2,038 EC**, full-history ≈ **18,317 EC** per symbol (measured 2026-11-18, prod) |
 | range queries (`begin/end`) | force-pay `max_limit` (500 bars) — measured 33,656 EC for a ~60-bar window; never use for increments |
 
 Every fetch result carries `metering` (`requests`, `ec_cost`, `note`) written to

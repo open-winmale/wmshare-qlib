@@ -5,14 +5,14 @@
 > 本文件只固化「要什么、为什么客户端造不出来、上游做了解锁什么」。
 > 延续诚实契约：每项写清证据与边界，不把推断写成结论。
 >
-> **请求 1 立项方案已定稿（2026-11-17，v3）并已实施（2026-11-18 全链落地）**：
+> **请求 1 已上线（2026-11-18 生产全通）**：
 > [upstream-daily-basic-plan.md](upstream-daily-basic-plan.md)
-> ——8 字段一次到位（流通股本源已查实，无源项为零）、存储定稿 V2 catalog
-> 专用表、抽样先行（hs300 样本组全字段×全历史）、时效 SLA 定稿（当日 17:00 前，
-> daily DAG 16:25 紧跟 kline 16:25 收窗）、双对账门。五仓代码已全部落地
-> （storage/kernel/script/airflow/wmshare + 本仓消费端 `--daily-basic` 门控
-> 与 `reconcile-daily-basic` Gate B），闭环验证通过；**待部署上线**
-> （storage/kernel 重编译部署、airflow DAG unpause、样本组首跑）。
+> ——六层全链（storage v1.0.163 → kernel/analysis v1.5.440 → winmale
+> 20261118110034 → script 9eb2cb9d → airflow → wmshare 2.1.0 → 本仓 0.3.0）
+> 部署完毕；600519 端到端验证绿（增量+3y 回填 726 docs、门 A 全精度一致、
+> 读端点 ok:true）；样本组 hs300=300 票 dry_run 绿，**daily 节奏待样本组
+> 验收后 unpause**。读 EC 实测修正预算口径：过滤读 ≈2,038 / 全量 ≈18,317
+> EC/次（非 cached）；卫生窗待办见方案 §7/§8 落地记录。
 
 ## 背景一句话
 
