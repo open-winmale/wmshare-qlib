@@ -12,7 +12,12 @@ Status: Phase 1 MVP, closed-loop validated; forward plan in
 > [!IMPORTANT]
 > **Data availability comes in three tiers — only the first is backtestable today.**
 > 1. **Real history** — kline (OHLCV+amount), moneyflow, PE/PB/PS/PR (≤3y, server
->    cap): dumped as Qlib `.bin`, backtestable immediately.
+>    cap): dumped as Qlib `.bin`, backtestable immediately. Plus the
+>    **upstream-gated `daily_basic` fields** (`pe_ttm/total_mv/circ_mv/
+>    turnover_rate/dv_ttm`) via `--daily-basic` — the server-side materialized
+>    table (plan: [docs/upstream-daily-basic-plan.md](docs/upstream-daily-basic-plan.md))
+>    is implemented end-to-end but not yet serving; until it ships the flag
+>    degrades to an explicit skip warning and the panel is unchanged.
 > 2. **Today only** — wmshare's 2,752 precomputed metric codes expose a CURRENT
 >    value and have NO history-series endpoint (verified against the SDK's
 >    screener/indicator surface, which accepts no date parameters). They are
@@ -22,7 +27,8 @@ Status: Phase 1 MVP, closed-loop validated; forward plan in
 >    a series is available **from its first captured day** and grows one real day
 >    at a time (the same pattern behind Qlib's PIT store and tushare-based daily
 >    datasets). A configurable cold-start guard (`--min-days`) gates promotion to
->    a backtestable panel.
+>    a backtestable panel. Once upstream serves the table, `reconcile-daily-basic`
+>    checks the accumulated PIT values against official history (Gate B, 100%).
 
 ## Install
 
@@ -79,12 +85,13 @@ the probed cost model in [docs/optimization-roadmap.md](docs/optimization-roadma
 
 | Command | Purpose | Key flags |
 |---|---|---|
-| `dump-history` | fetch history → Qlib `.bin` | `--live --symbols --n/--years --workers --max-ec --resume --adjust --store` |
+| `dump-history` | fetch history → Qlib `.bin` | `--live --symbols --n/--years --workers --max-ec --resume --adjust --store --daily-basic` |
 | `update-history` | incremental daily tails → reconcile → re-dump (live + hfq only) | `--max-ec` (required) `--tail-overlap --valuation-days` |
 | `dump-cross-section` | today's score CSV | `--via screener/snapshot --idx --max-ec` |
 | `accumulate` | append one daily PIT snapshot (prints availability + promotion status) | same dispatch + `--min-days` |
 | `write-universe` | `instruments/<name>.txt` from index membership or codes file | `--index/--codes-file --exclude-st --exclude-suspended` |
 | `verify` | read `.bin` back with Qlib's own reader | `--qlib-dir --check inst:field:date:value` |
+| `reconcile-daily-basic` | Gate B: accumulated PIT vs official daily_basic history (100% or fail) | `--accumulated --upstream --tol` |
 
 ## EC cost model (deterministic, probed 2026-11-17)
 

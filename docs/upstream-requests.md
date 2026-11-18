@@ -5,11 +5,14 @@
 > 本文件只固化「要什么、为什么客户端造不出来、上游做了解锁什么」。
 > 延续诚实契约：每项写清证据与边界，不把推断写成结论。
 >
-> **请求 1 立项方案已定稿（2026-11-17，v3）**：[upstream-daily-basic-plan.md](upstream-daily-basic-plan.md)
+> **请求 1 立项方案已定稿（2026-11-17，v3）并已实施（2026-11-18 全链落地）**：
+> [upstream-daily-basic-plan.md](upstream-daily-basic-plan.md)
 > ——8 字段一次到位（流通股本源已查实，无源项为零）、存储定稿 V2 catalog
 > 专用表、抽样先行（hs300 样本组全字段×全历史）、时效 SLA 定稿（当日 17:00 前，
-> daily DAG 16:25 紧跟 kline 16:25 收窗）、双对账门；服务端 4 仓链
-> （winmale/kernel/script/storage/airflow）改动锚点全部落到 文件:行号。
+> daily DAG 16:25 紧跟 kline 16:25 收窗）、双对账门。五仓代码已全部落地
+> （storage/kernel/script/airflow/wmshare + 本仓消费端 `--daily-basic` 门控
+> 与 `reconcile-daily-basic` Gate B），闭环验证通过；**待部署上线**
+> （storage/kernel 重编译部署、airflow DAG unpause、样本组首跑）。
 
 ## 背景一句话
 

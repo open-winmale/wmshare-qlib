@@ -181,6 +181,52 @@ def _valuation_frames(
     return frames, warnings, requests
 
 
+def _daily_basic_frames(
+    c: Any, symbol: str, instrument: str, fields: tuple[str, ...], meter_cb: Callable[[], None],
+    *, begin: str | None = None,
+) -> tuple[list[pd.DataFrame], list[str], int]:
+    """Fetch the materialized daily_basic series (upstream-gated, plan v3 §8).
+
+    Requests ONLY the panel-extension fields (config.PANEL_DAILY_BASIC_FIELDS);
+    daily_basic's pb/ps/pr duplicate the hist_stats series by design and are
+    left to the reconcile gate, never double-written. The endpoint may be
+    absent upstream (demo_unsupported / CatalogError until the server table
+    ships) - that is an explicit SKIP warning, never an error and never a
+    silent omission: the .bin panel stays exactly as before.
+    """
+    want = tuple(f for f in config.PANEL_DAILY_BASIC_FIELDS if f in fields)
+    frames: list[pd.DataFrame] = []
+    warnings: list[str] = []
+    requests = 0
+    if not want:
+        return frames, warnings, requests
+    try:
+        payload = call_with_retry(
+            lambda: c.valuation.daily_basic(symbol, begin=begin or "", fields=list(want)),
+            label=f"{symbol}/daily_basic", meter_cb=meter_cb, warn_cb=warnings.append,
+        )
+    except Exception as exc:  # endpoint not live yet / demo_unsupported: honest skip
+        requests += 1
+        warnings.append(
+            f"{symbol}/daily_basic: unavailable, skipped ({type(exc).__name__}: "
+            f"{str(exc)[:60]})"
+        )
+        return frames, warnings, requests
+    requests += 1
+    try:
+        df = normalize.daily_basic_to_frame(payload, symbol=symbol)
+    except normalize.NormalizeError as exc:
+        warnings.append(f"{symbol}/daily_basic: malformed envelope skipped ({exc})")
+        return frames, warnings, requests
+    if df.empty:
+        warnings.append(f"{symbol}/daily_basic: empty series skipped (no rows upstream)")
+        return frames, warnings, requests
+    df = df[df["field"].isin(want)]
+    df["instrument"] = instrument
+    frames.append(df[["date", "symbol", "instrument", "field", "value"]])
+    return frames, warnings, requests
+
+
 def _fetch_one_symbol(
     c: Any,
     symbol: str,
@@ -282,6 +328,14 @@ def _fetch_one_symbol(
     requests += vrequests
     warnings.extend(vwarnings)
     frames.extend(vframes)
+
+    # --- daily_basic (upstream-gated: materialized wide table, plan v3) ---
+    dbframes, dbwarnings, dbrequests = _daily_basic_frames(
+        c, symbol, instrument, fields, _meter
+    )
+    requests += dbrequests
+    warnings.extend(dbwarnings)
+    frames.extend(dbframes)
 
     # --- moneyflow ---
     if any(f in fields for f in config.MONEYFLOW_FIELDS):
@@ -626,6 +680,14 @@ def _fetch_tail_one_symbol(
         requests += vrequests
         warnings.extend(vwarnings)
         frames.extend(vframes)
+
+    # --- daily_basic tail (cached_eval read; unavailable upstream = skip) ---
+    dbframes, dbwarnings, dbrequests = _daily_basic_frames(
+        c, symbol, instrument, fields, _meter
+    )
+    requests += dbrequests
+    warnings.extend(dbwarnings)
+    frames.extend(dbframes)
 
     return frames, requests, (ec_total if has_meter else None), warnings
 

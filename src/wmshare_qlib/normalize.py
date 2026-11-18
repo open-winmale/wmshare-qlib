@@ -209,6 +209,54 @@ def moneyflow_to_frame(payload: Any, *, symbol: str) -> pd.DataFrame:
     return ascending_frame(df, label=f"moneyflow.bars[{symbol}]")
 
 
+def daily_basic_to_frame(payload: Any, *, symbol: str) -> pd.DataFrame:
+    """Normalize the valuation.daily_basic ENVELOPE to a LONG (date, field, value) frame.
+
+    Upstream contract (docs/upstream-daily-basic-plan.md v3 §6): envelope
+    ``{ok, as_of, data: [{date, symbol, field, value}...], meta}``, rows
+    oldest-first, missing values honestly absent (never zero-filled).
+    Guards: ok=False -> empty frame with as_of preserved in attrs; ok=True
+    with a non-list data -> FAIL LOUD (anti-pitfall #5).
+    """
+    cols = ["date", "symbol", "field", "value"]
+    if isinstance(payload, dict) and payload.get("ok") is False:
+        return pd.DataFrame(columns=cols)
+    if not isinstance(payload, dict) or "data" not in payload:
+        raise NormalizeError(
+            f"valuation.daily_basic[{symbol}]: expected the envelope "
+            f"{{ok, as_of, data, meta}}, got {type(payload).__name__}"
+        )
+    data = payload.get("data")
+    if not isinstance(data, list):
+        raise NormalizeError(
+            f"valuation.daily_basic[{symbol}]: envelope data must be a long-table "
+            f"list, got {type(data).__name__}"
+        )
+    rows = []
+    for item in data:
+        if not isinstance(item, dict):
+            raise NormalizeError(
+                f"valuation.daily_basic[{symbol}]: long-table row is not a dict: {item!r}"
+            )
+        missing = {"date", "symbol", "field", "value"} - set(item)
+        if missing:
+            raise NormalizeError(
+                f"valuation.daily_basic[{symbol}]: long-table row missing {missing}"
+            )
+        v = item["value"]
+        if v is None:
+            continue  # honest absence, never zero-filled
+        rows.append((_coerce_date(item["date"]), str(item["field"]), float(v)))
+    df = pd.DataFrame(rows, columns=["date", "field", "value"])
+    df["symbol"] = symbol
+    if not df.empty:
+        # Unit guard on every emitted value (bad scale must not enter Qlib).
+        for field, vals in df.groupby("field")["value"]:
+            for v in vals:
+                guard_unit(field, float(v))
+    return df[["date", "symbol", "field", "value"]]
+
+
 def merge_adjusted_klines(
     adj_df: pd.DataFrame, raw_df: pd.DataFrame, *, symbol: str
 ) -> pd.DataFrame:

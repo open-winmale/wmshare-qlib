@@ -17,6 +17,22 @@ BASE_FIELDS: tuple[str, ...] = (
 VALUATION_FIELDS: tuple[str, ...] = ("pe", "pb", "ps", "pr")
 MONEYFLOW_FIELDS: tuple[str, ...] = ("net_mf", "elg_net", "lg_net", "md_net", "sm_net")
 
+# --- daily_basic (upstream-gated, 2026-11-17) --------------------------------
+# The server-side materialized valuation wide table (alt.valuation_daily;
+# plan: docs/upstream-daily-basic-plan.md v3). Upstream names are the CONTRACT;
+# units are 2.0 base units (rates decimal, money CNY), same as units.yaml.
+DAILY_BASIC_FIELDS: tuple[str, ...] = (
+    "pe_ttm", "pb", "ps", "pr", "total_mv", "circ_mv", "turnover_rate", "dv_ttm",
+)
+# The five fields that EXTEND the .bin panel (no collision with hist_stats'
+# pe/pb/ps/pr). daily_basic's pb/ps/pr duplicate the hist_stats series by
+# design (Gate A: same server core) - they are consumed by the reconcile
+# gate only, never double-written into the panel.
+PANEL_DAILY_BASIC_FIELDS: tuple[str, ...] = (
+    "pe_ttm", "total_mv", "circ_mv", "turnover_rate", "dv_ttm",
+)
+HISTORY_FIELDS: tuple[str, ...] = BASE_FIELDS + VALUATION_FIELDS + MONEYFLOW_FIELDS
+
 # Fields that carry real history and may enter the Qlib .bin panel.
 HISTORY_FIELDS: tuple[str, ...] = BASE_FIELDS + VALUATION_FIELDS + MONEYFLOW_FIELDS
 
@@ -28,6 +44,9 @@ FIELD_UNITS: dict[str, str] = {
     "factor": "ratio", "pe": "ratio", "pb": "ratio", "ps": "ratio",
     "pr": "ratio", "net_mf": "CNY", "elg_net": "CNY", "lg_net": "CNY",
     "md_net": "CNY", "sm_net": "CNY",
+    # daily_basic (upstream-gated): 2.0 base units
+    "pe_ttm": "ratio", "total_mv": "CNY", "circ_mv": "CNY",
+    "turnover_rate": "pct01", "dv_ttm": "pct01",
 }
 
 # Direction of each upstream series (AGENTS.md anti-pitfall #3: points[0]).
@@ -114,6 +133,10 @@ EC_VALUATION_PER_METRIC = 712.0  # hist_stats 3y window, per metric (pe/pb/ps/pr
 EC_SNAPSHOT_PER_TICKET = 100.0   # kline.snapshot batch, N=3 measured (~58 at scale)
 EC_STOCKS_LIST = 66.0            # whole universe, one call
 EC_SCREENER_FULL_UNIVERSE = 204430.0  # measured: full market x 4 light columns
+# daily_basic (upstream-gated): cached_eval family - the SDK's estimate_cost
+# quotes ~4 EC per cached series read (hist_stats anchor). ESTIMATE, not a
+# probe; metering.ec_cost stays the only real quote.
+EC_DAILY_BASIC = 4.0
 
 # Operational cap measured live (2026-11-17): a single kline.snapshot batch
 # over ~81 tickets failed (server-side eval/timeout), while <=30-ticket

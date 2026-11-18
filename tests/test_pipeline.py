@@ -233,7 +233,8 @@ def test_field_declaration_two_way_coverage(tmp_path):
     # Demo snapshot does not store pb/ps/pr (only pe in the fixed snapshot).
     # `factor` is now emitted explicitly (qfq_const convention, factor=1).
     # Missing fields are EXPLICIT here — never silently ignored.
-    allowed_missing = set(config.VALUATION_FIELDS) - {"pe"}
+    allowed_missing = (set(config.VALUATION_FIELDS) - {"pe"}) | set(
+        config.PANEL_DAILY_BASIC_FIELDS)  # daily_basic: upstream-gated (plan v3)
     assert set(check["missing"]).issubset(allowed_missing), check["missing"]
     assert "factor" not in check["missing"], "factor must be emitted under qfq_const"
 

@@ -97,9 +97,12 @@ def cmd_dump_history(args: argparse.Namespace) -> None:
                     "demo spends 0 EC",
         }, ensure_ascii=False))
         return
+    fields = config.HISTORY_FIELDS
+    if getattr(args, "daily_basic", False):
+        fields = fields + config.PANEL_DAILY_BASIC_FIELDS
     params = {
         "n": args.n,
-        "fields": list(config.HISTORY_FIELDS),
+        "fields": list(fields),
         "live": bool(args.live),
         "freq": args.freq,
         "adjust": adjust_mode,
@@ -127,6 +130,7 @@ def cmd_dump_history(args: argparse.Namespace) -> None:
 
         result = fetch.fetch_history_panel(
             todo, live=args.live, n=args.n, client=None,
+            fields=fields,
             max_workers=args.workers, max_ec=args.max_ec,
             adjust_mode=adjust_mode, max_limit=max_limit, on_symbol=_save,
         )
@@ -286,6 +290,9 @@ def cmd_update_history(args: argparse.Namespace) -> None:
             valuation_refreshed=refreshed,
         )
 
+    fields = config.HISTORY_FIELDS
+    if getattr(args, "daily_basic", False):
+        fields = fields + config.PANEL_DAILY_BASIC_FIELDS
     result = fetch.fetch_history_tail(
         symbols,
         last_dates=last_dates,
@@ -294,6 +301,7 @@ def cmd_update_history(args: argparse.Namespace) -> None:
         overlap=args.tail_overlap,
         tail_max_n=args.tail_max_n,
         valuation_days=args.valuation_days,
+        fields=fields,
         client=None,
         max_workers=args.workers,
         max_ec=args.max_ec,
@@ -484,6 +492,32 @@ def cmd_write_universe(args: argparse.Namespace) -> None:
     }, ensure_ascii=False))
 
 
+def cmd_reconcile_daily_basic(args: argparse.Namespace) -> None:
+    """Gate B (plan v3 §5): accumulated PIT vs official daily_basic, 100% or fail."""
+    import pandas as pd
+
+    from . import reconcile
+
+    def _read(path: str) -> pd.DataFrame:
+        p = Path(path)
+        if p.suffix == ".parquet":
+            return pd.read_parquet(p)
+        return pd.read_csv(p)
+
+    acc = _read(args.accumulated)
+    ups = _read(args.upstream)
+    report = reconcile.reconcile_daily_basic(acc, ups, tol=args.tol)
+    print(json.dumps(report.as_meta(), ensure_ascii=False, indent=2))
+    if not report.ok:
+        raise SystemExit(
+            f"Gate B FAILED: {report.n_mismatch}/{report.n_compared} overlap "
+            f"values disagree beyond tol={args.tol} - investigate before use"
+        )
+    print(f"[gate-b] PASS: {report.n_compared} overlap values agree "
+          f"(missing accumulated={report.n_missing_accumulated}, "
+          f"missing upstream={report.n_missing_upstream})")
+
+
 def cmd_verify(args: argparse.Namespace) -> None:
     checks = []
     if args.check:
@@ -526,6 +560,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="hard EC ceiling; stop submitting symbols once reached (batch granularity)")
     h.add_argument("--resume", action="store_true",
                    help="reuse cached fragments, skip already-fetched symbols")
+    h.add_argument("--daily-basic", action="store_true",
+                   help="also fetch the upstream-gated daily_basic panel fields "
+                        "(pe_ttm/total_mv/circ_mv/turnover_rate/dv_ttm; requires "
+                        "the server table to be live; unavailable -> explicit "
+                        "skip warning, panel unchanged)")
     h.add_argument("--adjust", default=None,
                    choices=list(config.ADJUSTMENT_MODES),
                    help="price adjustment convention: auto = hfq_factor on "
@@ -568,6 +607,9 @@ def build_parser() -> argparse.ArgumentParser:
     u.add_argument("--valuation-days", type=int, default=7,
                    help="refresh the 3y valuation series only when this many "
                         "days elapsed (valuation dominates EC: ~712 EC per metric)")
+    u.add_argument("--daily-basic", action="store_true",
+                   help="also fetch the daily_basic panel fields on the tail "
+                        "(cached_eval read; unavailable upstream -> skip warning)")
     u.add_argument("--dry-run", action="store_true",
                    help="print the per-symbol tail plan + EC estimate and exit")
     u.add_argument("--freq", default="day")
@@ -615,6 +657,19 @@ def build_parser() -> argparse.ArgumentParser:
                    help="print the pre-flight EC estimate and exit")
     a.add_argument("--out", default="out/cs_accum")
     a.set_defaults(func=cmd_accumulate)
+
+    r = sub.add_parser(
+        "reconcile-daily-basic",
+        help="Gate B: compare layer-3 accumulated PIT values against the "
+             "official daily_basic history over the overlap (plan v3 §5)",
+    )
+    r.add_argument("--accumulated", required=True,
+                   help="long frame parquet/csv [date, instrument, field, value] (layer 3)")
+    r.add_argument("--upstream", required=True,
+                   help="long frame parquet/csv [date, instrument, field, value] (daily_basic)")
+    r.add_argument("--tol", type=float, default=1e-6,
+                   help="absolute tolerance on base-unit values (default 1e-6)")
+    r.set_defaults(func=cmd_reconcile_daily_basic)
 
     v = sub.add_parser("verify", help="read .bin back with Qlib and check values")
     v.add_argument("--qlib-dir", default="out/qlib_data")
