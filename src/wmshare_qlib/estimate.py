@@ -70,14 +70,29 @@ def margin_query(n_rows: int) -> float:
     return config.EC_MARGIN_PER_ROW * max(0, int(n_rows))
 
 
-def tail_symbol(k: int, *, valuation_due: bool, valuation_metrics: int = 4,
-                moneyflow: bool = True) -> float:
-    """One symbol in an incremental ``update-history`` run (P0-1)."""
+def tail_symbol(
+    k: int,
+    *,
+    valuation_due: bool,
+    valuation_metrics: int = 4,
+    moneyflow: bool = True,
+    daily_basic: bool = False,
+    daily_basic_span_days: int = 0,
+) -> float:
+    """One symbol in an incremental ``update-history`` run (P0-1).
+
+    ``daily_basic`` quotes the WINDOWED read (P3-1): floor + per-doc over the
+    scanned span (resume pointer back-span or the tail window on first-ever
+    read). Quoting the unwindowed full history here would normalize a bug the
+    fetch layer no longer commits.
+    """
     est = 2 * kline_call(k)  # dual pull: adj + raw (always, see P0-1)
     if moneyflow:
         est += moneyflow_call(k)
     if valuation_due:
         est += valuation_refresh(valuation_metrics)
+    if daily_basic:
+        est += daily_basic_read(max(0, int(daily_basic_span_days)))
     return est
 
 

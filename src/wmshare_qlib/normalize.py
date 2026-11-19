@@ -246,7 +246,7 @@ def daily_basic_to_frame(payload: Any, *, symbol: str) -> pd.DataFrame:
         v = item["value"]
         if v is None:
             continue  # honest absence, never zero-filled
-        rows.append((_coerce_date(item["date"]), str(item["field"]), float(v)))
+        rows.append((_coerce_date(item["date"]).isoformat(), str(item["field"]), float(v)))
     df = pd.DataFrame(rows, columns=["date", "field", "value"])
     df["symbol"] = symbol
     if not df.empty:
@@ -296,7 +296,9 @@ def merge_adjusted_klines(
         )
     merged = adj_df.merge(
         raw_df[["date", "close"]].rename(columns={"close": "_close_raw"}),
-        on="date", how="inner", validate="one_to_one",
+        on="date",
+        how="inner",
+        validate="one_to_one",
     )
     if len(merged) != len(adj_df):
         raise NormalizeError(
@@ -339,9 +341,7 @@ def guard_unit(field: str, value: float) -> float:
         raise NormalizeError(f"field {field!r} has no unit declaration")
     lo, hi = config.unit_value_range(unit)
     if not (lo <= value <= hi):
-        raise NormalizeError(
-            f"field {field}={value} outside [{lo}, {hi}] for unit {unit}"
-        )
+        raise NormalizeError(f"field {field}={value} outside [{lo}, {hi}] for unit {unit}")
     return float(value)
 
 

@@ -20,9 +20,9 @@ import pytest
 from wmshare_qlib import cli, config, dump, fetch, format, normalize, panel, resume
 
 SYMS = ["600519", "000858"]
-TODAY_BULK = "2026-11-10"   # bulk fetch day
-TODAY_TAIL = "2026-11-17"   # one week later: gap 7d -> k = 7 + overlap
-EXDIV_DAY = "2026-11-13"    # hfq factor steps UP here (event applies to >= day)
+TODAY_BULK = "2026-11-10"  # bulk fetch day
+TODAY_TAIL = "2026-11-17"  # one week later: gap 7d -> k = 7 + overlap
+EXDIV_DAY = "2026-11-13"  # hfq factor steps UP here (event applies to >= day)
 KEY = ["date", "instrument", "field", "value"]
 
 
@@ -38,6 +38,17 @@ def _doy(iso: str) -> int:
 
 def _raw_close(d: str) -> float:
     return 10.0 + _doy(d) * 0.1
+
+
+# daily_basic stub values: all inside config guard_unit ranges (bad scale
+# must NOT enter the panel - the stub must be a valid upstream, not a bomb)
+_DB_VALUES = {
+    "pe_ttm": 20.0,
+    "total_mv": 1.8e12,
+    "circ_mv": 1.8e12,
+    "turnover_rate": 0.021,
+    "dv_ttm": 0.036,
+}
 
 
 def _hfq_factor(d: str) -> float:
@@ -74,14 +85,16 @@ class _StubMoneyflow:
     def bars(self, symbol, n=60):
         rows = max(1, int(n or 1))
         dates = _dates_asc(self.today, rows)
-        return pd.DataFrame({
-            "date": dates,
-            "net_mf": [60.0 + _doy(d) * 0.5 for d in dates],
-            "elg_net": [30.0 + _doy(d) * 0.2 for d in dates],
-            "lg_net": [20.0 + _doy(d) * 0.1 for d in dates],
-            "md_net": [5.0 + _doy(d) * 0.1 for d in dates],
-            "sm_net": [-5.0 + _doy(d) * 0.05 for d in dates],
-        })
+        return pd.DataFrame(
+            {
+                "date": dates,
+                "net_mf": [60.0 + _doy(d) * 0.5 for d in dates],
+                "elg_net": [30.0 + _doy(d) * 0.2 for d in dates],
+                "lg_net": [20.0 + _doy(d) * 0.1 for d in dates],
+                "md_net": [5.0 + _doy(d) * 0.1 for d in dates],
+                "sm_net": [-5.0 + _doy(d) * 0.05 for d in dates],
+            }
+        )
 
 
 class _StubValuation:
@@ -93,16 +106,49 @@ class _StubValuation:
 
     today = TODAY_BULK
 
+    def __init__(self) -> None:
+        self.db_calls: list[dict] = []
+
+    def daily_basic(self, symbol, begin=None, end=None, fields=None):
+        """Param-sensitive daily_basic stub: rows are a pure function of
+        (date, field); the request window is RECORDED so tests can assert the
+        begin-windowing contract (P3-1)."""
+        self.db_calls.append(
+            {
+                "symbol": symbol,
+                "begin": begin or "",
+                "fields": list(fields or []),
+            }
+        )
+        want = list(fields or config.PANEL_DAILY_BASIC_FIELDS)
+        lo = begin or "2026-09-01"
+        dates = [d for d in _dates_asc(self.today, 400) if d >= lo]
+        rows = [
+            {
+                "date": d,
+                "symbol": symbol,
+                "field": f,
+                "value": _DB_VALUES[f],
+            }
+            for d in dates
+            for f in want
+        ]
+        return {"ok": True, "as_of": self.today, "data": rows, "meta": {"fields": want}}
+
     def hist_stats(self, symbol, metric="pe", window="3y"):
         dates = _dates_asc(self.today, 80)
         # 2.x envelope: {ok, as_of, data:{series: DF[date, value]}}, asc.
         return {
             "ok": True,
             "as_of": self.today,
-            "data": {"series": pd.DataFrame({
-                "date": dates,
-                "value": [20.0 + _doy(d) * 0.01 for d in dates],
-            })},
+            "data": {
+                "series": pd.DataFrame(
+                    {
+                        "date": dates,
+                        "value": [20.0 + _doy(d) * 0.01 for d in dates],
+                    }
+                )
+            },
             "meta": {},
         }
 
@@ -134,8 +180,13 @@ def _build_bulk(tmp_path, symbols=SYMS, n=60):
     store = tmp_path / "resume"
     manifest = resume.init_manifest(
         store,
-        params={"n": n, "fields": list(config.HISTORY_FIELDS), "live": True,
-                "freq": "day", "adjust": "hfq_factor"},
+        params={
+            "n": n,
+            "fields": list(config.HISTORY_FIELDS),
+            "live": True,
+            "freq": "day",
+            "adjust": "hfq_factor",
+        },
         resume=False,
     )
     stub = _StubClient()
@@ -146,12 +197,22 @@ def _build_bulk(tmp_path, symbols=SYMS, n=60):
         # keep using it, exactly like the CLI's nonlocal holder. today is the
         # STUB clock (the bulk fetch happened at TODAY_BULK in stub time).
         state["manifest"] = resume.record_fragment(
-            store, state["manifest"], symbol, instrument, frames, ec,
+            store,
+            state["manifest"],
+            symbol,
+            instrument,
+            frames,
+            ec,
             today=TODAY_BULK,
         )
 
     result = fetch.fetch_history_panel(
-        symbols, live=True, n=n, client=stub, max_workers=1, on_symbol=_save,
+        symbols,
+        live=True,
+        n=n,
+        client=stub,
+        max_workers=1,
+        on_symbol=_save,
     )
     assert result.metering.ec_cost is not None
     return store, state["manifest"], stub
@@ -171,6 +232,9 @@ def _run_tail(store, manifest, stub, symbols=SYMS, **kw):
         or entry.get(s, {}).get("bulk_date")
         for s in symbols
     }
+    db_last = {
+        s: (entry.get(s, {}).get("tail") or {}).get("daily_basic_last_date") for s in symbols
+    }
     merged_manifest = manifest
 
     def _save(symbol, instrument, frames, ec):
@@ -180,15 +244,34 @@ def _run_tail(store, manifest, stub, symbols=SYMS, **kw):
             for f in frames
             if hasattr(f, "columns") and "field" in f.columns
         )
+        # mirror the CLI's _save_tail: the daily_basic pointer advances from
+        # the RESULT only (P3-1)
+        db_dates: list[str] = []
+        for f in frames:
+            if (
+                hasattr(f, "columns")
+                and "field" in f.columns
+                and set(f["field"].unique()) & set(config.PANEL_DAILY_BASIC_FIELDS)
+            ):
+                d = pd.to_datetime(f["date"], errors="coerce").dropna()
+                db_dates.extend(d.dt.date.astype(str).tolist())
         merged_manifest = resume.record_tail_fragment(
-            store, merged_manifest, symbol, instrument, frames, ec,
-            valuation_refreshed=refreshed, today=today,
+            store,
+            merged_manifest,
+            symbol,
+            instrument,
+            frames,
+            ec,
+            valuation_refreshed=refreshed,
+            today=today,
+            daily_basic_last_date=max(db_dates) if db_dates else None,
         )
 
     result = fetch.fetch_history_tail(
         symbols,
         last_dates=last_dates,
         valuation_last_dates=v_last,
+        daily_basic_last_dates=db_last,
         live=True,
         today=today,
         client=stub,
@@ -306,15 +389,24 @@ def test_tail_ec_ceiling_stops_before_second_symbol(tmp_path):
 
 def test_tail_is_live_only():
     with pytest.raises(normalize.NormalizeError, match="live-only"):
-        fetch.fetch_history_tail(SYMS, last_dates={s: TODAY_BULK for s in SYMS},
-                                 live=False)
+        fetch.fetch_history_tail(SYMS, last_dates={s: TODAY_BULK for s in SYMS}, live=False)
 
 
 # --- CLI guard rails (all fire BEFORE any network/EC) ------------------------
 def _ns(**kw):
-    base = dict(symbols=None, live=False, out="out/qlib_data", store=None,
-                workers=1, max_ec=None, adjust=None, tail_overlap=5,
-                tail_max_n=30, valuation_days=7, freq="day")
+    base = dict(
+        symbols=None,
+        live=False,
+        out="out/qlib_data",
+        store=None,
+        workers=1,
+        max_ec=None,
+        adjust=None,
+        tail_overlap=5,
+        tail_max_n=30,
+        valuation_days=7,
+        freq="day",
+    )
     base.update(kw)
     return argparse.Namespace(**base)
 
@@ -332,3 +424,62 @@ def test_update_history_refuses_qfq_const():
 def test_update_history_requires_max_ec():
     with pytest.raises(SystemExit, match="max-ec"):
         cli.cmd_update_history(_ns(live=True))
+
+
+# --- P3-1: tail daily_basic reads are windowed; the resume pointer advances ---
+def test_tail_daily_basic_is_windowed_and_pointer_advances(tmp_path):
+    store, manifest, stub = _build_bulk(tmp_path)
+    stub.set_today(TODAY_TAIL)
+    fields = config.HISTORY_FIELDS + config.PANEL_DAILY_BASIC_FIELDS
+
+    # first-ever tail: no resume pointer -> begin = today - tail_max_n
+    result, manifest = _run_tail(store, manifest, stub, fields=fields, tail_max_n=30)
+    calls = stub.valuation.db_calls
+    assert calls, "daily_basic must be called on the tail path"
+    expected_first = (dt.date.fromisoformat(TODAY_TAIL) - dt.timedelta(days=30)).isoformat()
+    assert all(c["begin"] == expected_first for c in calls), calls
+    assert all(sorted(c["fields"]) == sorted(config.PANEL_DAILY_BASIC_FIELDS) for c in calls), calls
+    for s in SYMS:
+        assert manifest["symbols"][s]["tail"]["daily_basic_last_date"] == TODAY_TAIL, (
+            "pointer must advance when the read returned rows"
+        )
+
+    # second tail next day: begin = the recorded pointer (NOT a full re-read)
+    stub.valuation.db_calls.clear()
+    stub.set_today("2026-11-18")
+    _result2, manifest2 = _run_tail(store, manifest, stub, fields=fields, tail_max_n=30)
+    calls2 = stub.valuation.db_calls
+    assert calls2, "second tail must still read daily_basic"
+    assert all(c["begin"] == TODAY_TAIL for c in calls2), calls2
+    for s in SYMS:
+        assert manifest2["symbols"][s]["tail"]["daily_basic_last_date"] == "2026-11-18"
+
+
+def test_tail_without_daily_basic_fields_never_calls_endpoint(tmp_path):
+    store, manifest, stub = _build_bulk(tmp_path)
+    stub.set_today(TODAY_TAIL)
+    result, _manifest = _run_tail(store, manifest, stub)  # default HISTORY_FIELDS
+    assert stub.valuation.db_calls == []
+
+
+# --- P3-3: Gate B automation - pull the official side over the acc window ----
+def test_reconcile_daily_basic_from_upstream(tmp_path, monkeypatch, capsys):
+    import argparse as _argparse
+
+    store, manifest, stub = _build_bulk(tmp_path)
+    stub.set_today(TODAY_TAIL)
+    fields = config.HISTORY_FIELDS + config.PANEL_DAILY_BASIC_FIELDS
+    _result, manifest = _run_tail(store, manifest, stub, fields=fields, tail_max_n=30)
+
+    monkeypatch.setattr(fetch, "_client", lambda live=True, **kw: stub)
+    ns = _argparse.Namespace(
+        accumulated=None,
+        upstream=None,
+        from_upstream=True,
+        store=str(store),
+        symbols=None,
+        tol=1e-6,
+    )
+    cli.cmd_reconcile_daily_basic(ns)  # must not raise: accumulated==upstream
+    out = capsys.readouterr().out
+    assert "[gate-b] PASS" in out

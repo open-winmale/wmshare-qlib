@@ -173,6 +173,7 @@ def record_tail_fragment(
     ec: float | None,
     *,
     valuation_refreshed: bool,
+    daily_basic_last_date: str | None = None,
     today: str | None = None,
 ) -> dict:
     """Persist one symbol's incremental tail and record its state.
@@ -180,7 +181,10 @@ def record_tail_fragment(
     The tail holds bars appended AFTER the bulk fragment (P0-1). ``last_date``
     advances only when the tail actually carries rows; ``valuation_last_date``
     advances only when a valuation refresh was included, so the cadence
-    decision survives interruption.
+    decision survives interruption. ``daily_basic_last_date`` advances only
+    when a daily_basic read actually returned rows (P3-1): it windows the
+    NEXT read, so a failed/empty read must not advance it (the retry stays
+    windowed rather than silently re-scanning full history).
     """
     frag = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=COLS)
     if not frag.empty and "value" in frag.columns:
@@ -207,6 +211,8 @@ def record_tail_fragment(
         tail_state["rows"] = int(tail_state.get("rows") or 0) + int(len(frag))
     if valuation_refreshed:
         tail_state["valuation_last_date"] = today or dt.date.today().isoformat()
+    if daily_basic_last_date:
+        tail_state["daily_basic_last_date"] = str(daily_basic_last_date)
     entry["tail"] = tail_state
     symbols[symbol] = entry
     manifest["symbols"] = symbols
@@ -266,15 +272,11 @@ def load_panel_with_tail(store: str | Path, manifest: dict | None = None) -> pd.
         g = dups.groupby(key, sort=False)["value"]
         lo = g.transform("min")
         hi = g.transform("max")
-        tol = RECONCILE_ATOL + RECONCILE_RTOL * pd.concat(
-            [lo.abs(), hi.abs()], axis=1
-        ).max(axis=1)
+        tol = RECONCILE_ATOL + RECONCILE_RTOL * pd.concat([lo.abs(), hi.abs()], axis=1).max(axis=1)
         conflict = (hi - lo) > tol
         if conflict.any():
             bad = dups.loc[conflict, key].drop_duplicates().head(3)
-            detail = "; ".join(
-                f"{r.date}/{r.instrument}/{r.field}" for r in bad.itertuples()
-            )
+            detail = "; ".join(f"{r.date}/{r.instrument}/{r.field}" for r in bad.itertuples())
             raise ValueError(
                 f"bulk/tail reconciliation FAILED: overlapping rows disagree "
                 f"beyond tolerance (e.g. {detail}) - upstream history revision "

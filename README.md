@@ -94,7 +94,7 @@ the probed cost model in [docs/optimization-roadmap.md](docs/optimization-roadma
 | `accumulate` | append one daily PIT snapshot (prints availability + promotion status) | same dispatch + `--min-days` |
 | `write-universe` | `instruments/<name>.txt` from index membership or codes file | `--index/--codes-file --exclude-st --exclude-suspended` |
 | `verify` | read `.bin` back with Qlib's own reader | `--qlib-dir --check inst:field:date:value` |
-| `reconcile-daily-basic` | Gate B: accumulated PIT vs official daily_basic history (100% or fail) | `--accumulated --upstream --tol` |
+| `reconcile-daily-basic` | Gate B: accumulated PIT vs official daily_basic history (100% or fail) | `--accumulated --upstream --tol`, or `--from-upstream --store` (pull the official side over the accumulated window, P3-3) |
 
 ## EC cost model (deterministic, probed 2026-11-17)
 
@@ -110,7 +110,7 @@ roadmap §2.5). They are estimates — the paid `metering.ec_cost` is the only r
 | `kline.snapshot` batch | ≈ `66–100 EC/票` (client-side chunks of 30; N=81 measured 66.2) |
 | `kline.batch_live` | ≈ `45 EC/票` (daily OHLCV; percent/ex-div semantics unverified — not used) |
 | `screener.query` | full market × 4 light columns = **204,430 EC**; small-limit probes do NOT predict full-universe cost |
-| `valuation.daily_basic` | bills by rows scanned (NOT cached): 1-day floor ≈ **1,707 EC**, 13-day/2-field ≈ **2,038 EC**, full history ≈ **18,317 EC**, incremental cadence ≈ **312 EC/票/日** (all measured 2026-11-18, prod) |
+| `valuation.daily_basic` | bills by rows scanned (NOT cached): 1-day floor ≈ **1,707 EC**, 13-day/2-field ≈ **2,038 EC**, full history ≈ **18,317 EC**, incremental cadence ≈ **312 EC/票/日** (all measured 2026-11-18, prod). `update-history --daily-basic` reads are WINDOWED from the resume pointer (P3-1) — ≈ floor + 23×span, never a full re-read |
 | `margin.query` / `margin.latest` | ≈ **124 EC/行** (20 rows = 2,472 EC) / **182 EC** for the one-row read (measured 2026-11-18; the SDK has no model for these) |
 | range queries (`begin/end`) | **still force-pay the anchor WINDOW, not the returned rows** — re-probed on wmshare 2.2.0 (2026-11-18): a 49-trading-day kline window returned 49 rows but paid **33,688 EC** (= 156 + 67×500). 2.2.0 pagination lifts completeness limits (any span, no silent truncation), NOT short-window cost — never use for increments |
 
