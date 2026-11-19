@@ -163,9 +163,30 @@ airflow（buyback 同款：拉数 → raw 文档 → `do_clean_data` 入库 → 
 
 | 期 | 内容 | 验收 |
 |---|---|---|
-| P0 样本组 | hs300 样本：全字段物化 + 全历史回填 + 端点上线 | **推进中（2026-11-19 复盘）**：端点上线全通；近窗自愈上线（生产实证：缺日 11-12/13/16 自动补齐 300 票、11-17 残行 mv 2→300 修复、周六正确跳过）；5 交易日 × 300 票 × 8 字段完备（`dbtool valuation-daily-completeness` 口径）；freshness 检测器分时段期望日 + 连续性维度上线（盘中假阳性消除）；raw 回归忠实累积日志；消费端 tail 窗口化 + Gate B 自动化（`reconcile-daily-basic --from-upstream`）。**待办**：3y 回补实测 1,466 EC/票 → 全样本组 ≈43.8 万 EC（授权待批）；10 交易日 SLA 时钟运行中 |
+| P0 样本组 | hs300 样本：全字段物化 + 全历史回填 + 端点上线 | **推进中（2026-11-19 复盘）**：端点上线全通；近窗自愈上线（生产实证：缺日 11-12/13/16 自动补齐 300 票、11-17 残行 mv 2→300 修复、周六正确跳过）；5 交易日 × 300 票 × 8 字段完备（`dbtool valuation-daily-completeness` 口径）；freshness 检测器分时段期望日 + 连续性维度上线（盘中假阳性消除）；raw 回归忠实累积日志；消费端 tail 窗口化 + Gate B 自动化（`reconcile-daily-basic --from-upstream`）。**待办**：3y 回补实测 1,466 EC/票 → 全样本组 ≈43.8 万 EC（授权待批）；10 交易日 SLA 时钟运行中（详见下「2026-11-19 午后执行记录」） |
 | P1 扩全市场 | ~5.7k 票复用同一 DAG | P0 三条扩容判据全绿后执行；分组错峰 + freshness guard 全量覆盖；**前置成本评审见 [full-market-expansion-review.md](full-market-expansion-review.md)**（≈178 万 EC/日增量，需服务端批量/下推先行，见 wmshare CHANGELOG Unreleased 候选） |
 | P2（可选） | screener 历史索引 as-of 截面（按日期查历史物化索引） | — |
+
+### 2026-11-19 午后执行记录（授权点 A/B 落地 + 读面回归发现）
+
+- **授权点 A（3y 回补）已执行**：299 票 × 6 批 manual（5×50+49，批次 4 触发未建
+  run 当场补跑），总 EC **438,569**（预算 43.8 万 ✓，与 1,466 EC/票实测锚一致），
+  各批 `failed=0`。全量审计：299/299 有数、中位/最大 727 docs（满 3y），仅 3 票
+  次新股合法短史（001280 首日 2025-12-03、600930 2025-07-16、001391 2024-12-30）；
+  近 5 交易日 11-12/13/16/17/18 × 300 无损。
+- **授权点 B（索引键序）已执行**：`uk_symbol_catalog_ts` drop+recreate 为
+  `{symbol:1, catalog:1, ts:1}` unique（216,694 docs 秒级，午间静默窗口），
+  消除与 `v2/store.go:64-66` 的 IndexKeySpecsConflict。
+- **🆕 读面回归（新发现，非本次动作引入）**：`valuation.daily_basic` 只回最新
+  **~200 交易日**（600519/000001 双票实测 min=2026-01-21，727 天中 527 天缺席；
+  窗口读回 `ok=false/count=0`）。机制：kernel/analysis `v2FindArgsFromOpts`
+  对 `limit≤0` 取 200 默认（market_reader.go:250-252），XS
+  `valuation.store_query(s, 0)` 显式传 0（`DEFAULT(0,1500)` 不替换）。
+  11-18 全量读实测 726 日 / 18,317 EC（计费随 ~727 行走），11-19 只扫 200 行
+  ——**当日服务端发布波收紧**，非本仓动作所致。影响面：写链/guard/tail 消费
+  （≤200 日）均不受影响；3y 因子消费与 Gate B 长窗对账被挡。修复候选（script
+  一行 `store_query(s, valuation.DEFAULT_LIMIT)`）登记于 wmshare CHANGELOG
+  Unreleased，**待授权执行**。
 
 ## 8. 各仓改动锚点清单（评审排期后执行）
 
