@@ -31,8 +31,6 @@ DAILY_BASIC_FIELDS: tuple[str, ...] = (
 PANEL_DAILY_BASIC_FIELDS: tuple[str, ...] = (
     "pe_ttm", "total_mv", "circ_mv", "turnover_rate", "dv_ttm",
 )
-HISTORY_FIELDS: tuple[str, ...] = BASE_FIELDS + VALUATION_FIELDS + MONEYFLOW_FIELDS
-
 # Fields that carry real history and may enter the Qlib .bin panel.
 HISTORY_FIELDS: tuple[str, ...] = BASE_FIELDS + VALUATION_FIELDS + MONEYFLOW_FIELDS
 

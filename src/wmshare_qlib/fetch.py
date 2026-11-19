@@ -55,6 +55,48 @@ def _is_transient(exc: Exception) -> bool:
     return False
 
 
+def is_fatal(exc: Exception) -> bool:
+    """True for errors that must abort the symbol, never degrade to a warning.
+
+    A per-field fetch that swallows ``AuthError``/``QuotaError`` produces a panel
+    with silently missing fields and exit code 0 - the user reads a thinner
+    result and believes it. These two are account-level conditions: they affect
+    every subsequent call and retrying the next field cannot help.
+    """
+    try:
+        from wmshare import errors as _werr
+    except ImportError:
+        return False
+    return isinstance(exc, (_werr.AuthError, _werr.QuotaError))
+
+
+def _credential_hint(exc: Exception) -> str:
+    """Turn an account-level failure into something a user can act on."""
+    name = type(exc).__name__
+    try:
+        from wmshare import errors as _werr
+
+        if isinstance(exc, _werr.AuthError):
+            return (
+                f"{name} - wmshare credentials are missing or rejected. "
+                "Set WMSHARE_CLIENT_ID and WMSHARE_CLIENT_SECRET (or write "
+                "~/.wmshare/credentials.env), and apply for an application at "
+                "https://open.winmale.com (我的 -> 开放平台 -> 我的应用). "
+                f"Upstream said: {str(exc)[:160]}"
+            )
+        if isinstance(exc, _werr.QuotaError):
+            return (
+                f"{name} - wmshare EC/quota exhausted (retrying will not help). "
+                "Platform default applications refill weekly on Mondays; self-created "
+                "additional applications hold a one-time quota. Switch to the default "
+                "application's credentials at https://open.winmale.com, upgrade, or "
+                f"top up. Upstream said: {str(exc)[:160]}"
+            )
+    except ImportError:  # pragma: no cover - SDK is a hard dependency
+        pass
+    return f"{name}: {str(exc)[:200]}"
+
+
 def call_with_retry(
     fn: Callable[[], Any],
     *,
@@ -121,12 +163,25 @@ def _client(live: bool, max_limit: int | None = None, timeout: float | None = No
         # whole universe in ONE request - pagination re-pays EC). timeout is
         # forwarded because full-universe column materialization can exceed
         # the SDK's 30s default (measured: TransportError read timeout).
+        #
+        # NOTE: `validate` is deliberately LEFT AT ITS DEFAULT (True). The SDK's
+        # unit invariants (volume x close / amount) are the only client-side
+        # check that catches an upstream returning the wrong adjustment basis -
+        # e.g. 2026-11-19: `kline.bars("600519", n=5, adj=None)` served
+        # back-adjusted prices (12473.67 vs a true 1442.66), tripping this very
+        # invariant. Turning validation off here would silently feed wrong
+        # prices into a backtest (see wmshare docs/BACKLOG.md).
         kw: dict[str, Any] = {}
         if max_limit:
             kw["max_limit"] = max_limit
         if timeout:
             kw["timeout"] = timeout
-        return wmshare.Client.from_env(**kw)
+        try:
+            return wmshare.Client.from_env(**kw)
+        except Exception as exc:  # AuthError on missing/invalid credentials
+            if is_fatal(exc):
+                raise RuntimeError(_credential_hint(exc)) from exc
+            raise
     return wmshare.demo_client()
 
 
@@ -155,6 +210,8 @@ def _valuation_frames(
             )
         except Exception as exc:  # wmshare.errors.UsageError and friends
             requests += 1
+            if is_fatal(exc):
+                raise RuntimeError(_credential_hint(exc)) from exc
             warnings.append(f"{symbol}/{vfield}: skipped ({type(exc).__name__}: {str(exc)[:60]})")
             continue
         requests += 1
@@ -213,6 +270,8 @@ def _daily_basic_frames(
         )
     except Exception as exc:  # endpoint not live yet / demo_unsupported: honest skip
         requests += 1
+        if is_fatal(exc):
+            raise RuntimeError(_credential_hint(exc)) from exc
         warnings.append(
             f"{symbol}/daily_basic: unavailable, skipped ({type(exc).__name__}: {str(exc)[:60]})"
         )
@@ -361,6 +420,8 @@ def _fetch_one_symbol(
             )
         except Exception as exc:
             requests += 1
+            if is_fatal(exc):
+                raise RuntimeError(_credential_hint(exc)) from exc
             warnings.append(f"{symbol}/moneyflow: skipped ({type(exc).__name__}: {str(exc)[:60]})")
             mraw = None
         if mraw is not None:
@@ -1261,6 +1322,14 @@ def fetch_cross_section(
     warnings: list[str] = []
 
     if live:
+        if universe is not None:
+            # The live path scopes via screener.query(idx=...) and cannot apply a
+            # per-call code list; silently returning the whole market would hand
+            # back a frame the caller did not ask for.
+            warnings.append(
+                "universe= is ignored on the live path; scope a live cross-section "
+                "with idx=<index key> (e.g. idx='index.hs300') instead"
+            )
         codes = [m.code for m in metric_codes]
         where_cond = where or config.CROSS_SECTION_WHERE
         # ONE request at the 10000-row hard cap - the universe (~5.7k) fits,

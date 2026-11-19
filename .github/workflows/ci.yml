@@ -40,6 +40,72 @@ jobs:
       - name: Tier-1 tests (no Qlib, no live/EC)
         run: PYTHONPATH=src python -m pytest tests -q -m "not live"
 
+  package:
+    # Release-readiness gates: the package must build, its metadata must be
+    # complete, and its docs must not link to files that do not exist.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+
+      - name: Twine check (metadata renders on PyPI)
+        run: python -m twine check dist/*
+
+      - name: Wheel contains py.typed and the package
+        run: |
+          python - <<'PY'
+          import zipfile, pathlib, sys
+          whl = sorted(pathlib.Path("dist").glob("*.whl"))[0]
+          names = zipfile.ZipFile(whl).namelist()
+          required = ["wmshare_qlib/__init__.py", "wmshare_qlib/py.typed",
+                      "wmshare_qlib/cli.py"]
+          missing = [r for r in required if r not in names]
+          if missing:
+              print("missing from wheel:", missing); sys.exit(1)
+          print(f"wheel ok: {len(names)} entries")
+          PY
+
+      - name: Relative doc links resolve
+        run: |
+          python - <<'PY'
+          import pathlib, re, sys
+          root = pathlib.Path(".")
+          bad = []
+          for md in list(root.glob("*.md")) + list((root / "docs").glob("*.md")):
+              for target in re.findall(r"\]\(([^)#:]+)(?:#[^)]*)?\)", md.read_text(encoding="utf-8")):
+                  if target.startswith(("http://", "https://", "mailto:")):
+                      continue
+                  if not (md.parent / target).exists():
+                      bad.append(f"{md}: {target}")
+          if bad:
+              print("dead relative links:"); [print(" ", b) for b in bad]; sys.exit(1)
+          print("all relative links resolve")
+          PY
+
+      - name: CHANGELOG section extractable for the declared version
+        run: |
+          ver="$(python -c 'import re,pathlib;print(re.search(r"__version__ = \"([^\"]+)\"", pathlib.Path("src/wmshare_qlib/__init__.py").read_text(encoding="utf-8")).group(1))')"
+          python tools/changelog_section.py "$ver" --check
+
+      - name: Install the built wheel and smoke-test the CLI
+        run: |
+          python -m venv /tmp/wheelvenv
+          /tmp/wheelvenv/bin/pip install --quiet dist/*.whl
+          /tmp/wheelvenv/bin/wmshare-qlib --help > /tmp/help.txt
+          for cmd in dump-history update-history dump-cross-section accumulate \
+                     write-universe verify reconcile-daily-basic; do
+            grep -q "$cmd" /tmp/help.txt || { echo "::error::$cmd missing from --help"; exit 1; }
+          done
+          echo "all seven subcommands present"
+
   tier2:
     # NON-BLOCKING pyqlib read-back (single version - see header comment).
     continue-on-error: true

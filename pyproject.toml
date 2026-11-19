@@ -4,11 +4,37 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wmshare-qlib"
-version = "0.3.3"
-description = "Qlib-native data layer powered by wmshare (CN/HK precomputed factors)"
+dynamic = ["version"]
+description = "Qlib-native data layer powered by wmshare: A-share history panels, score CSVs and instrument universes in Microsoft Qlib format"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "BSD-3-Clause" }
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+authors = [{ name = "open-winmale contributors" }]
+maintainers = [{ name = "open-winmale contributors" }]
+keywords = [
+    "qlib",
+    "quantitative-finance",
+    "backtesting",
+    "a-share",
+    "china-stock-market",
+    "factor-research",
+    "alpha158",
+    "market-data",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Intended Audience :: Science/Research",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Typing :: Typed",
+]
 dependencies = [
     "wmshare>=2.2.0,<3",
     "pandas>=2.0",
@@ -17,14 +43,30 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-qlib = ["pyqlib>=0.9"]
+# pyqlib 0.9.x is built against numpy 1.x; installing it alongside numpy 2
+# resolves to a broken binary in some environments (evidenced in CI tier-2,
+# which pins "numpy<2" for the same reason).
+qlib = ["pyqlib>=0.9", "numpy<2"]
 test = ["pytest>=7"]
+
+[project.urls]
+Homepage = "https://github.com/open-winmale/wmshare-qlib"
+Repository = "https://github.com/open-winmale/wmshare-qlib"
+Documentation = "https://github.com/open-winmale/wmshare-qlib/blob/main/docs/getting-started.md"
+Issues = "https://github.com/open-winmale/wmshare-qlib/issues"
+Changelog = "https://github.com/open-winmale/wmshare-qlib/blob/main/CHANGELOG.md"
 
 [project.scripts]
 wmshare-qlib = "wmshare_qlib.cli:main"
 
+[tool.setuptools.dynamic]
+version = { attr = "wmshare_qlib.__version__" }
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+wmshare_qlib = ["py.typed"]
 
 [tool.pytest.ini_options]
 markers = [
@@ -34,8 +76,8 @@ markers = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
-exclude = [".qlibvendor", "out", "pr_package"]
+target-version = "py311"
+exclude = [".qlibvendor", "out", "pr_package", "docs/internal"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]  # pycodestyle/pyflakes/warnings/isort

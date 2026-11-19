@@ -422,3 +422,40 @@ def test_tail_symbol_quotes_windowed_daily_basic():
     delta = config.EC_DAILY_BASIC_FLOOR + config.EC_DAILY_BASIC_PER_DOC * 14
     assert with_db > base
     assert abs((with_db - base) - delta) < 1e-6
+
+
+# --- 0.4.0 public-surface hardening ------------------------------------------
+def test_fatal_errors_are_not_downgraded(monkeypatch):
+    """Auth/quota must abort the symbol, not become a silent missing field.
+
+    A swallowed AuthError upstream of the panel merge yields a thinner panel
+    with exit code 0 - the caller cannot tell it apart from a legitimately
+    shorter history.
+    """
+    _fake_errors(monkeypatch)
+    assert fetch.is_fatal(wmshare.errors.AuthError("no creds"))
+    assert fetch.is_fatal(wmshare.errors.QuotaError("empty"))
+    assert not fetch.is_fatal(wmshare.errors.UsageError("bad param"))
+
+    hint = fetch._credential_hint(wmshare.errors.AuthError("no creds"))
+    assert "WMSHARE_CLIENT_ID" in hint
+    assert "open.winmale.com" in hint
+
+    qhint = fetch._credential_hint(wmshare.errors.QuotaError("empty"))
+    assert "quota" in qhint.lower()
+
+
+def test_public_all_lists_full_surface():
+    import wmshare_qlib
+
+    declared = set(wmshare_qlib.__all__)
+    for name in ("config", "normalize", "fetch", "panel", "cross_section", "dump",
+                 "format", "qlib_io", "resume", "estimate", "reconcile"):
+        assert name in declared, f"{name} missing from __all__"
+        assert hasattr(wmshare_qlib, name), f"{name} declared but not importable"
+
+
+def test_screener_estimate_is_labelled_full_market():
+    """The anchor is a full-market probe; the docstring must not imply per-index."""
+    assert "FULL market" in (estimate.screener_full.__doc__ or "")
+    assert "not yet probed" in (estimate.screener_full.__doc__ or "")

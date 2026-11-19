@@ -21,8 +21,9 @@ This follows the REAL structure documented in microsoft/qlib's
 Why this is material and not a drop-in PR:
   - It depends on wmshare (an external SDK), so upstream must first decide
     whether a third-party commercial-data dependency is acceptable.
-  - ``wmshare-qlib`` is not yet a public repo (GitHub 404 as of 2026-11-17);
-    there is no reviewer-accessible source for a PR to point at.
+  - ``wmshare-qlib`` was a private repo when this draft was written
+    (GitHub 404 as of 2026-11-17); it is public now, so that particular
+    blocker is stale — the CLA and dependency-acceptance points stand.
   - Signing the Microsoft CLA is a legal act that only the account owner can do.
 
 Do NOT paste this file into Qlib and call it "contributed". See README.md here.

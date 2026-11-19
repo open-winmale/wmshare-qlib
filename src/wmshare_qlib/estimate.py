@@ -102,6 +102,12 @@ def snapshot_batch(n_symbols: int) -> float:
 
 
 def screener_full(metrics: int = 4) -> float:
-    """``--via screener`` full-market: measured anchor scaled by column count."""
+    """``--via screener`` full-market: measured anchor scaled by column count.
+
+    NOTE: this anchor was probed on the FULL market (~5.7k names). A scoped
+    ``idx=`` query (e.g. ``index.hs300``) bills far less, but the per-index
+    anchor is not yet probed — callers should treat this as a worst-case quote
+    and say so, rather than silently presenting it as an index-sized estimate.
+    """
     per_column = config.EC_SCREENER_FULL_UNIVERSE / 4.0
     return per_column * max(0, int(metrics)) + config.EC_STOCKS_LIST

@@ -25,6 +25,12 @@ def _print_cross_section_estimate(args: argparse.Namespace) -> None:
     else:
         n = "full universe"
         est = estimate.screener_full()
+        idx = getattr(args, "idx", None)
+        if idx:
+            # The anchor is a FULL-market probe; a scoped idx= query is cheaper
+            # by an unprobed factor. Say so instead of presenting the full-market
+            # number as if it were an index-sized quote.
+            n = f"idx={idx} (anchor unprobed; quoting the full-market worst case)"
     print(
         "[dry-run]",
         json.dumps(
@@ -646,6 +652,14 @@ def cmd_reconcile_daily_basic(args: argparse.Namespace) -> None:
             if sub.empty:
                 warns.append(f"{s}: no accumulated daily_basic rows, skipped")
                 continue
+            cap = getattr(args, "max_ec", None)
+            if cap is not None and sum(ec_seen) >= cap:
+                warns.append(
+                    f"stopped at --max-ec {cap:g} (spent {sum(ec_seen):g} EC) "
+                    f"after {n_pulled}/{len(symbols)} symbols; rerun with a higher "
+                    "budget or a narrower --symbols list"
+                )
+                break
             begin = pd.to_datetime(sub["date"]).min().date().isoformat()
             frames, w, _ = fetch._daily_basic_frames(
                 client, s, inst, config.PANEL_DAILY_BASIC_FIELDS, _meter, begin=begin
@@ -936,6 +950,13 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="*",
         default=None,
         help="with --from-upstream: subset (default: whole store)",
+    )
+    r.add_argument(
+        "--max-ec",
+        type=float,
+        default=None,
+        help="budget ceiling for --from-upstream: stop pulling symbols once the "
+        "metered spend reaches it (reads bill floor + ~23 EC/doc)",
     )
     r.add_argument(
         "--tol",
