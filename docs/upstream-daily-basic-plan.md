@@ -163,8 +163,8 @@ airflow（buyback 同款：拉数 → raw 文档 → `do_clean_data` 入库 → 
 
 | 期 | 内容 | 验收 |
 |---|---|---|
-| P0 样本组 | hs300 样本：全字段物化 + 全历史回填 + 端点上线 | **进行中（2026-11-18）**：端点已上线（读全通）；600519 全链验证绿（增量+3y 回填 726 docs、门 A 单点全精度一致、无伪 0）；universe 解析 300 票绿；待 daily unpause 后连续 10 交易日 SLA 达成 |
-| P1 扩全市场 | ~5.7k 票复用同一 DAG | P0 三条扩容判据全绿后执行；分组错峰 + freshness guard 全量覆盖 |
+| P0 样本组 | hs300 样本：全字段物化 + 全历史回填 + 端点上线 | **推进中（2026-11-19 复盘）**：端点上线全通；近窗自愈上线（生产实证：缺日 11-12/13/16 自动补齐 300 票、11-17 残行 mv 2→300 修复、周六正确跳过）；5 交易日 × 300 票 × 8 字段完备（`dbtool valuation-daily-completeness` 口径）；freshness 检测器分时段期望日 + 连续性维度上线（盘中假阳性消除）；raw 回归忠实累积日志；消费端 tail 窗口化 + Gate B 自动化（`reconcile-daily-basic --from-upstream`）。**待办**：3y 回补实测 1,466 EC/票 → 全样本组 ≈43.8 万 EC（授权待批）；10 交易日 SLA 时钟运行中 |
+| P1 扩全市场 | ~5.7k 票复用同一 DAG | P0 三条扩容判据全绿后执行；分组错峰 + freshness guard 全量覆盖；**前置成本评审见 [full-market-expansion-review.md](full-market-expansion-review.md)**（≈178 万 EC/日增量，需服务端批量/下推先行，见 wmshare CHANGELOG Unreleased 候选） |
 | P2（可选） | screener 历史索引 as-of 截面（按日期查历史物化索引） | — |
 
 ## 8. 各仓改动锚点清单（评审排期后执行）

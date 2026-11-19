@@ -346,3 +346,30 @@ storage v1.0.163 → kernel/analysis v1.5.440 → winmale 20261118110034-7233802
 - ✗ 不在 demo 路径伪装增量（demo 快照没有"新增 bar"概念）；
 - ✗ 不在未 re-probe 定价前，按旧锚点承诺新的日频成本数字；
 - ✗ 不触碰 wmshare 主仓（独立仓库纪律不变）。
+
+## 十一、生产端自愈 + 消费端窗口化（2026-11-19，双完备批次）
+
+**生产端（airflow，bf23a891 + f6f90d7c，已 release）**
+
+11. **近窗自愈**：增量模式对近 5 交易日「缺行或 mv 缺失」的日补整行（pe 取
+   6m 序列该日值 + mv AT(day)），基线读 mv 感知（残行可修）；V2 读失败退化
+   只写前沿日。生产实证：缺日 11-12/13/16 × 300 自动补齐、11-17 残行
+   mv 2→300 修复。raw 按 trade_date 合并（忠实累积日志，radd 重建安全）；
+   mv 回走按交易日历（周末不再空转）；freshness 检测器分时段期望日 +
+   近 5 日连续性（缺日 warn/error）；`dbtool valuation-daily-completeness`
+   完备性审计（逐日行数 × 8 字段矩阵 + 缺日/逐票缺日清单）。
+
+**消费端（wmshare-qlib，4df61d0）**
+
+12. **tail daily_basic 窗口化**：resume 指针 `daily_basic_last_date` +
+    `begin` 窗读——增量日更从 ≈18.3k EC/票（全史重读）降到 ≈2k EC/票；
+    指针只随 RESULT 前进（空读不推进）。`estimate.tail_symbol` 补 daily_basic
+    项；`reconcile-daily-basic --from-upstream --store` 门 B 自动化（官方侧
+    按 accumulated 窗口拉取，消除手喂文件）；`daily_basic_to_frame` date
+    落盘改 ISO 字符串（与 kline/moneyflow 一致，修掉混列 parquet 崩溃的
+    潜在 bug）。
+13. **服务端缺口登记**（wmshare 6fdf59e，Unreleased/Planned）：daily_basic
+    分页+truncated（>1500 日静默缺席）、ts 下推、coverage API、多票批量、
+    estimate_cost 再校准；扩全市场评审见
+    [full-market-expansion-review.md](full-market-expansion-review.md)
+    （≈177.6 万 EC/日，建议服务端批量 eval 先行）。
