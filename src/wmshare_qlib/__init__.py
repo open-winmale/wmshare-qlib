@@ -10,7 +10,7 @@ only (no history-series endpoint). We never fabricate history by pasting today's
 value across dates.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.3.3"
 
 __all__ = [
     "config",
