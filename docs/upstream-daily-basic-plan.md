@@ -186,7 +186,12 @@ airflow（buyback 同款：拉数 → raw 文档 → `do_clean_data` 入库 → 
   ——**当日服务端发布波收紧**，非本仓动作所致。影响面：写链/guard/tail 消费
   （≤200 日）均不受影响；3y 因子消费与 Gate B 长窗对账被挡。修复候选（script
   一行 `store_query(s, valuation.DEFAULT_LIMIT)`）登记于 wmshare CHANGELOG
-  Unreleased，**待授权执行**。
+  Unreleased，**已于当日修复**：script `sys/valuation/store.xs` 包装层把
+  `limit≤0` 归一到 `DEFAULT_LIMIT`（commit `015032f2`，pipeline-5982 部署，
+  push→部署 ~2 分钟）；修复后实测 600519/000001 全量各回 **727 日**
+  （2023-11-20 起）、2024-06 历史窗口 `ok=true`——端点读面恢复合同。
+  附带发现：上午回补时引擎估值序列已含 11-19 盘中截面，299 票的 11-19 行为
+  盘中口径，今晚 16:25 frontier 恒重写收敛为收盘口径。
 
 ## 8. 各仓改动锚点清单（评审排期后执行）
 
