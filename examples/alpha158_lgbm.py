@@ -6,7 +6,7 @@ an ``if __name__ == '__main__'`` guard for its multiprocessing cache), and calls
 ``qlib.init()`` ONLY in this dedicated process — never in the adapter library.
 
 Run (demo snapshot = zero EC, offline):
-    PYTHONPATH=src:.qlibvendor python examples/alpha158_lgbm.py --qlib-dir out/qlib_data
+    python examples/alpha158_lgbm.py --qlib-dir out/qlib_data  # needs 'wmshare-qlib[qlib]'
 
 What it verifies (M2 gate):
   1. DataHandler loads ALL declared fields (OHLCV + custom $pe) with zero

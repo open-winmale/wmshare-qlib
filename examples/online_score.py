@@ -1,7 +1,8 @@
 """Example: wmshare cross section -> score CSV -> ScoreFileModel (line A, closed loop).
 
 Run:
-  PYTHONPATH=src:.qlibvendor python examples/online_score.py
+  pip install 'wmshare-qlib[qlib]'   # pyqlib is only needed by the qlib_io examples
+  python examples/online_score.py
 """
 
 from __future__ import annotations

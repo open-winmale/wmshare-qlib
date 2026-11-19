@@ -1,7 +1,8 @@
 """Example: wmshare -> Qlib .bin -> D.features / DataHandler (line B, closed loop).
 
-Run (with the locally isolated Qlib on PYTHONPATH):
-  PYTHONPATH=src:.qlibvendor python examples/dump_to_qlib.py
+Run (pyqlib comes from the ``qlib`` extra):
+  pip install 'wmshare-qlib[qlib]'
+  python examples/dump_to_qlib.py
 """
 
 from __future__ import annotations
