@@ -948,7 +948,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--valuation-days",
         type=int,
         default=7,
-        help="refresh the 3y valuation series only when this many "
+        help="refresh the valuation series only when this many "
         "days elapsed (valuation dominates EC: ~712 EC per metric)",
     )
     u.add_argument(

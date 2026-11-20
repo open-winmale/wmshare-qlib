@@ -116,8 +116,8 @@ child process, so importing this package never reconfigures your Qlib session.
 
 Only the first layer is backtestable today:
 
-1. **Real history** — kline (OHLCV+amount), moneyflow, `pe/pb/ps/pr` (≤3y server
-   cap), plus the materialized `valuation.daily_basic` family
+1. **Real history** — kline (OHLCV+amount), moneyflow, `pe/pb/ps/pr` (10y
+   window, `config.VALUATION_WINDOW`), plus the materialized `valuation.daily_basic` family
    (`pe_ttm/total_mv/circ_mv/turnover_rate/dv_ttm`) via `--daily-basic`. Dumped
    straight into Qlib `.bin`. `$vwap` is derived at dump time (`amount/volume`;
    the stored volume is already factor-adjusted, so it is consistent with the
@@ -161,7 +161,7 @@ for estimates:
 |---|---|
 | `kline.bars` | `156 + 67 × served_bars` EC (the live `hfq_factor` path pulls adj + raw, so it doubles) |
 | `moneyflow.bars` | `156 + 16 × n` EC |
-| `valuation.hist_stats` | 712 EC per metric per 3y window (4 metrics = 2,848) |
+| `valuation.hist_stats` | 712 EC per metric (3y-window fit; the default is now 10y, which bills more) |
 | `kline.snapshot` batch | ≈66–100 EC/票 |
 | `kline.batch_live` | ≈45 EC/票 (percent/ex-div semantics unverified — not used) |
 | `screener.query` | full market × 4 light columns = **204,430 EC**; small probes do NOT predict full-universe cost |

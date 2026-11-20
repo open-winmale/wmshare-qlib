@@ -186,14 +186,20 @@ def _client(live: bool, max_limit: int | None = None, timeout: float | None = No
 
 
 def _valuation_frames(
-    c: Any, symbol: str, instrument: str, fields: tuple[str, ...], meter_cb: Callable[[], None]
+    c: Any,
+    symbol: str,
+    instrument: str,
+    fields: tuple[str, ...],
+    meter_cb: Callable[[], None],
+    window: str = config.VALUATION_WINDOW,
 ) -> tuple[list[pd.DataFrame], list[str], int]:
-    """Fetch the pe/pb/ps/pr 3y series (shared by bulk and tail paths).
+    """Fetch the pe/pb/ps/pr valuation-window series (shared by bulk and tail paths).
 
-    Returns ``(frames, warnings, requests_used)``. Demo snapshot only stores
-    pe/3y; unsupported metrics are skipped with an explicit warning (cold-cache
-    guard: never fabricate, never fill 0). EC metering goes through the
-    caller's ``meter_cb`` so per-path accounting stays exact.
+    Returns ``(frames, warnings, requests_used)``. The demo snapshot only
+    stores pe/3y (callers pass ``window="3y"`` for demo); unsupported metrics
+    are skipped with an explicit warning (cold-cache guard: never fabricate,
+    never fill 0). EC metering goes through the caller's ``meter_cb`` so
+    per-path accounting stays exact.
     """
     frames: list[pd.DataFrame] = []
     warnings: list[str] = []
@@ -204,7 +210,7 @@ def _valuation_frames(
         try:
             payload = call_with_retry(
                 lambda vf=vfield: c.valuation.hist_stats(
-                    symbol, metric=vf, window=config.VALUATION_WINDOW),
+                    symbol, metric=vf, window=window),
                 label=f"{symbol}/{vfield}",
                 meter_cb=meter_cb,
                 warn_cb=warnings.append,
@@ -397,7 +403,10 @@ def _fetch_one_symbol(
     )
 
     # --- valuation (pe/pb/ps/pr) ---
-    vframes, vwarnings, vrequests = _valuation_frames(c, symbol, instrument, fields, _meter)
+    vframes, vwarnings, vrequests = _valuation_frames(
+        c, symbol, instrument, fields, _meter,
+        window=config.VALUATION_WINDOW if live else "3y",
+    )
     requests += vrequests
     warnings.extend(vwarnings)
     frames.extend(vframes)
@@ -771,7 +780,7 @@ def _fetch_tail_one_symbol(
             )
         )
 
-    # --- valuation (cadence-gated: the 3y window re-pulls the whole series,
+    # --- valuation (cadence-gated: the window re-pulls the whole series,
     # which the bulk/tail reconciliation then verifies row-by-row) ---
     if want_valuation:
         vframes, vwarnings, vrequests = _valuation_frames(c, symbol, instrument, fields, _meter)

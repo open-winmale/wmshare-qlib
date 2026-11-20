@@ -20,7 +20,7 @@ and are immediately usable in a backtest:
 | `open/high/low/close/volume/amount` | `kline.bars` | full served window (`--n`/`--years`) |
 | `factor` | derived from adj+raw in the same call | same window |
 | `vwap` | derived at dump time: `amount / volume` | same window |
-| `pe/pb/ps/pr` | `valuation.hist_stats` | 3y default (`config.VALUATION_WINDOW`; the engine serves up to 10y — 600519 pe 10y = 2,450 daily points, live-probed 2026-11-20 — flip the knob once wmshare ≥ 2.5.0 ships) |
+| `pe/pb/ps/pr` | `valuation.hist_stats` | 10y default (`config.VALUATION_WINDOW`; the engine has no year cap — 600519 pe 10y = 2,450 daily points, live-probed 2026-11-20; requires wmshare ≥ 2.5.0) |
 | `net_mf/elg_net/lg_net/md_net/sm_net` | `moneyflow.bars` | served window |
 | `pe_ttm/total_mv/circ_mv/turnover_rate/dv_ttm` | `valuation.daily_basic` (`--daily-basic`) | server-materialized, grows one day at a time |
 
@@ -91,7 +91,7 @@ anchors below are the single source of truth (`config.EC_*`):
 |---|---|
 | `kline.bars` | `156 + 67 × served_bars`; the live `hfq_factor` path pulls twice (adj + raw) |
 | `moneyflow.bars` | `156 + 16 × n` |
-| `valuation.hist_stats` | 712 EC per metric per 3y window (4 metrics = 2,848) |
+| `valuation.hist_stats` | 712 EC per metric (3y-window fit; the default is now 10y, which bills more) |
 | `kline.snapshot` batch | ≈66–100 EC/票 |
 | `screener.query` | full market × 4 light columns = **204,430 EC** |
 | `valuation.daily_basic` | bills by **rows scanned**: 1-day floor ≈1,707 EC, full history ≈18,317 EC, incremental ≈312 EC/票/日 |

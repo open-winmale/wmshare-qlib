@@ -26,7 +26,7 @@ def assert_dates_aligned_across_fields(
     A systematic one-day offset (e.g. a timezone bug in epoch->date conversion)
     drives coverage to ~0 and fails LOUD here instead of silently misaligning
     $pe against $close inside Qlib. Valuation series may extend OLDER than the
-    anchor window (3y history vs n-day kline) - that only increases |field| and
+    anchor window (valuation window vs n-day kline) - that only increases |field| and
     never lowers coverage, so the ratio is one-sided safe.
 
     Fields absent for an instrument are skipped (coverage is a data-availability

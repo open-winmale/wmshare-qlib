@@ -10,19 +10,15 @@ While on `0.x`, minor versions may change public API; patch versions will not.
 
 ### Added
 
-- **`config.VALUATION_WINDOW`** (default `"3y"`). The valuation `pe/pb/ps/pr`
-  series window is now a knob. The engine itself has no year cap — kernel
-  `parseWindow` accepts any `Ny/Nq/Nm`; live probe 2026-11-20 returned 2,450
-  daily pe points (2016-11-21 → now) for `window="10y"`. The old "3y cap" was
-  an SDK allowlist, relaxed upstream in lockstep. Flip to `"10y"` once
-  wmshare ≥ 2.5.0 (relaxed allowlist) ships; the window is recorded in the
-  store manifest params for audit.
-
-### Added
-
+- **10-year valuation history.** `config.VALUATION_WINDOW` now defaults to
+  `"10y"` (was `"3y"`): the `pe/pb/ps/pr` panel series reaches back to 2016-11
+  (live probe 2026-11-20: 600519 pe 10y = 2,450 daily points). The engine never
+  had a year cap — kernel `parseWindow` accepts any `Ny/Nq/Nm`; the old "3y
+  cap" was an SDK allowlist, relaxed in wmshare 2.5.0. The window is recorded
+  in the store manifest params for audit.
 - **PIT index-universe episodes.** `write-universe --index` now prefers the
   upstream materialized membership-snapshot table (`index.members_history`,
-  wmshare ≥ next release): daily membership snapshots are folded into
+  wmshare ≥ 2.5.0): daily membership snapshots are folded into
   per-instrument episodes (`dump.universe_episodes_from_history`) and written as
   multi-row Qlib instruments files — `D.instruments("<name>")` resolves
   membership point-in-time, and dropped members keep their closed episodes
@@ -37,6 +33,12 @@ While on `0.x`, minor versions may change public API; patch versions will not.
   invariant. Suspension days (zero volume) stay NaN. Qlib's bundled cn_data
   ships `$vwap` and Alpha158 consumes it, so the full Alpha158 surface is now
   reachable (`examples/alpha158_lgbm.py` includes a `$vwap` feature).
+
+### Changed
+
+- Requires `wmshare >= 2.5.0`: that release relaxed the `hist_stats` window
+  allowlist (5y/10y) and added the `index.members_history` facade. Older SDKs
+  would reject `window="10y"` client-side.
 
 ## [0.4.0] - 2026-11-19
 

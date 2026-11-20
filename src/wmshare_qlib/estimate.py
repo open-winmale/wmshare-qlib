@@ -21,7 +21,7 @@ def moneyflow_call(n_bars: int) -> float:
 
 
 def valuation_refresh(metrics: int = 4) -> float:
-    """A full 3y valuation refresh (per-symbol; metrics x hist_stats)."""
+    """A full valuation-window refresh (per-symbol; metrics x hist_stats)."""
     return config.EC_VALUATION_PER_METRIC * max(0, int(metrics))
 
 

@@ -37,11 +37,11 @@ HISTORY_FIELDS: tuple[str, ...] = BASE_FIELDS + VALUATION_FIELDS + MONEYFLOW_FIE
 # Window for valuation.hist_stats series (pe/pb/ps/pr panel fields).
 # The engine itself has NO year cap (kernel parseWindow accepts any Ny/Nq/Nm;
 # live-probed 2026-11-20: 600519 pe 10y = 2,450 daily points from 2016-11-21).
-# The old 3y ceiling was an SDK allowlist, relaxed upstream in the same change.
-# Default stays "3y" until wmshare >= 2.5.0 (relaxed allowlist) is on PyPI;
-# bump to "10y" then - deeper series just extend the panel backwards and the
-# date-alignment guard is one-sided safe.
-VALUATION_WINDOW: str = "3y"
+# The old 3y ceiling was an SDK allowlist; wmshare 2.5.0 relaxed it (on PyPI
+# 2026-11-20) and this library now requires that floor, so 10y is the default:
+# the deeper series simply extend the panel backwards and the date-alignment
+# guard is one-sided safe.
+VALUATION_WINDOW: str = "10y"
 
 # Unit declaration. Amount in the raw layer is CNY yuan; Qlib 'amount' expects
 # turnover in yuan as well. Ratio/ratio-like fields are dimensionless.
