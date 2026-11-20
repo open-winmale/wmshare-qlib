@@ -8,6 +8,8 @@ While on `0.x`, minor versions may change public API; patch versions will not.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-20
+
 ### Added
 
 - **10-year valuation history.** `config.VALUATION_WINDOW` now defaults to
