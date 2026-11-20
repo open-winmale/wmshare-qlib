@@ -70,6 +70,21 @@ def test_cross_field_alignment_catches_one_day_offset():
     assert any("/pe" in i for i in rep["issues"])
 
 
+def test_cross_field_alignment_stale_field_is_not_offset():
+    """A field that stopped publishing BEFORE the anchor window (北交所 pe 断供
+    shape: 920719 last pe 2024-08-28 while kline anchors are recent) is a data
+    availability fact, not a systematic offset - record in ``stale``, keep ok.
+    """
+    r = fetch.fetch_history_panel(SYMBOLS, n=60)
+    stale = r.frame.copy()
+    is_pe = stale["field"] == "pe"
+    assert is_pe.any(), "demo panel has no pe rows; stale test vacuous"
+    stale.loc[is_pe, "date"] = "2000-01-04"  # whole field predates anchor window
+    rep = panel.assert_dates_aligned_across_fields(stale)
+    assert rep["ok"], rep
+    assert any("/pe" in s for s in rep["stale"])
+
+
 # --- P1-3 regression: unit magnitude guard is wired into integrity ------------
 def test_panel_integrity_catches_absurd_magnitude():
     """Scale drift (e.g. pe emitted as 1e6) must fail integrity, never reach Qlib."""

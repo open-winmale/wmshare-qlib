@@ -31,8 +31,13 @@ def assert_dates_aligned_across_fields(
 
     Fields absent for an instrument are skipped (coverage is a data-availability
     concern handled by assert_field_declaration_roundtrip, not an alignment one).
+    Fields whose dates ALL predate the anchor window are stale (upstream stopped
+    publishing, e.g. BJ boards losing pe when financials lag) - recorded in
+    ``stale``, NOT a failure: a systematic offset interleaves field dates with
+    the anchor window, it cannot put every field date strictly before it.
     """
     issues: list[str] = []
+    stale: list[str] = []
     coverage: dict[str, float] = {}
     if panel.empty:
         return {"ok": True, "issues": ["empty panel; skipped"], "coverage": coverage}
@@ -51,12 +56,18 @@ def assert_dates_aligned_across_fields(
             cov = len(inter) / len(anchor_dates)
             coverage[f"{inst}/{f}"] = round(cov, 4)
             if cov < min_coverage:
+                if pd.to_datetime(max(f_dates)) < pd.to_datetime(min(anchor_dates)):
+                    stale.append(
+                        f"{inst}/{f}: last {max(f_dates)} predates anchor window; "
+                        f"stale (availability), not offset"
+                    )
+                    continue
                 issues.append(
                     f"{inst}/{f}: date coverage {cov:.2%} < {min_coverage:.0%} "
                     f"({len(inter)}/{len(anchor_dates)} anchor dates aligned; "
                     f"suspect systematic offset)"
                 )
-    return {"ok": not issues, "issues": issues, "coverage": coverage}
+    return {"ok": not issues, "issues": issues, "coverage": coverage, "stale": stale}
 
 
 def assert_panel_integrity(panel: pd.DataFrame) -> dict:
