@@ -8,6 +8,16 @@ While on `0.x`, minor versions may change public API; patch versions will not.
 
 ## [Unreleased]
 
+### Added
+
+- **`$vwap` field.** The dumper derives `vwap = amount / volume` at dump time
+  (`dump._append_vwap`); the upstream kline surface has no vwap. Stored volume
+  is already divided by the adjustment factor, so the quotient is consistent
+  with the adjusted (hfq) prices and preserves the `close × volume == amount`
+  invariant. Suspension days (zero volume) stay NaN. Qlib's bundled cn_data
+  ships `$vwap` and Alpha158 consumes it, so the full Alpha158 surface is now
+  reachable (`examples/alpha158_lgbm.py` includes a `$vwap` feature).
+
 ## [0.4.0] - 2026-11-19
 
 First public release: installable from PyPI, with user-facing documentation and a

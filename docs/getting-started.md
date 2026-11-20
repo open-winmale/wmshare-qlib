@@ -70,6 +70,7 @@ out/qlib_data/
 │   ├── sh600519/
 │   │   ├── open.day.bin  high.day.bin  low.day.bin  close.day.bin
 │   │   ├── volume.day.bin  amount.day.bin  factor.day.bin
+│   │   ├── vwap.day.bin           # derived: amount / volume (dump-time)
 │   │   ├── pe.day.bin             # demo has pe only; pb/ps/pr are skipped
 │   │   └── net_mf.day.bin elg_net.day.bin lg_net.day.bin md_net.day.bin sm_net.day.bin
 │   └── sz000858/...

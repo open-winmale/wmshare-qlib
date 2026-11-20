@@ -19,9 +19,16 @@ and are immediately usable in a backtest:
 |---|---|---|
 | `open/high/low/close/volume/amount` | `kline.bars` | full served window (`--n`/`--years`) |
 | `factor` | derived from adj+raw in the same call | same window |
+| `vwap` | derived at dump time: `amount / volume` | same window |
 | `pe/pb/ps/pr` | `valuation.hist_stats` | **≤ 3 years** (server cap) |
 | `net_mf/elg_net/lg_net/md_net/sm_net` | `moneyflow.bars` | served window |
 | `pe_ttm/total_mv/circ_mv/turnover_rate/dv_ttm` | `valuation.daily_basic` (`--daily-basic`) | server-materialized, grows one day at a time |
+
+`vwap` is not an upstream field — Qlib's bundled cn_data ships one and Alpha158
+consumes it, so the dumper derives it (`dump._append_vwap`). The stored `volume`
+is already divided by the adjustment factor, which makes the quotient consistent
+with the adjusted (hfq) prices and preserves the `close × volume == amount`
+invariant. Suspension days (zero volume) stay NaN.
 
 The `--daily-basic` family is the newest addition: the wmshare service materializes a
 per-symbol-per-day valuation wide table on a daily cadence, so these fields have a

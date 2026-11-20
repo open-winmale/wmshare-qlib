@@ -30,14 +30,17 @@ import numpy as np
 import pandas as pd
 
 # Qlib feature expression config: use only fields we actually dumped.
-# Alpha158's default needs fields we may not have (e.g. $vwap); we build a small
-# explicit feature set from declared fields so the loop is honest and portable.
+# $vwap IS dumped now (derived as amount/volume at dump time, adjusted-consistent
+# with the stored hfq prices), so the set below can grow toward the full
+# Alpha158 surface; we keep a small explicit feature set so the loop stays
+# honest and portable.
 FEATURES = [
     "($close/$open-1)",          # intraday return
     "($high-$low)/$close",       # range
     "Ref($close,1)/$close-1",    # 1d reversal
     "Ref($close,5)/$close-1",    # 5d momentum
     "($close-$pe)/$close",       # price/valuation blend (uses CUSTOM field)
+    "($close-$vwap)/$vwap",      # close vs adjusted vwap (derived field)
     "Log($volume)",              # liquidity
 ]
 LABEL = "Ref($close,-2)/Ref($close,-1)-1"  # next-day return (T+1 open-to-close proxy)

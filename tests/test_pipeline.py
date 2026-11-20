@@ -234,7 +234,9 @@ def test_field_declaration_two_way_coverage(tmp_path):
     # `factor` is now emitted explicitly (qfq_const convention, factor=1).
     # Missing fields are EXPLICIT here — never silently ignored.
     allowed_missing = (set(config.VALUATION_FIELDS) - {"pe"}) | set(
-        config.PANEL_DAILY_BASIC_FIELDS)  # daily_basic: upstream-gated (plan v3)
+        config.PANEL_DAILY_BASIC_FIELDS) | {"vwap"}
+    # ^ vwap: derived at dump time (dump._append_vwap), absent from the
+    #   fetched long panel this test inspects.
     assert set(check["missing"]).issubset(allowed_missing), check["missing"]
     assert "factor" not in check["missing"], "factor must be emitted under qfq_const"
 

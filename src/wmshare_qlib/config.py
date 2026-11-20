@@ -39,6 +39,10 @@ HISTORY_FIELDS: tuple[str, ...] = BASE_FIELDS + VALUATION_FIELDS + MONEYFLOW_FIE
 FIELD_UNITS: dict[str, str] = {
     "open": "CNY/share", "high": "CNY/share", "low": "CNY/share",
     "close": "CNY/share", "volume": "shares", "amount": "CNY",
+    # vwap is DERIVED at dump time (amount / volume, dump._append_vwap): the
+    # upstream kline surface has no vwap field. Stored volume is already
+    # divided by factor, so the quotient is consistent with adjusted prices.
+    "vwap": "CNY/share",
     "factor": "ratio", "pe": "ratio", "pb": "ratio", "ps": "ratio",
     "pr": "ratio", "net_mf": "CNY", "elg_net": "CNY", "lg_net": "CNY",
     "md_net": "CNY", "sm_net": "CNY",

@@ -103,6 +103,7 @@ out/qlib_data/
 ├── calendars/day.txt              # ascending trading dates
 ├── instruments/all.txt            # INST\tstart\tend (write-universe adds named ones)
 ├── features/sh600519/*.day.bin    # Qlib float32 format, first element = start index
+│                                  # (includes $vwap, derived as amount/volume)
 ├── _resume/                       # fragment store: manifest + per-symbol parquet
 └── fetch_meta.json                # params, EC metering, warnings
 ```
@@ -118,7 +119,9 @@ Only the first layer is backtestable today:
 1. **Real history** — kline (OHLCV+amount), moneyflow, `pe/pb/ps/pr` (≤3y server
    cap), plus the materialized `valuation.daily_basic` family
    (`pe_ttm/total_mv/circ_mv/turnover_rate/dv_ttm`) via `--daily-basic`. Dumped
-   straight into Qlib `.bin`.
+   straight into Qlib `.bin`. `$vwap` is derived at dump time (`amount/volume`;
+   the stored volume is already factor-adjusted, so it is consistent with the
+   adjusted prices) — Alpha158 can consume it unmodified.
 2. **Today only** — wmshare's ~2,750 precomputed metric codes expose a *current*
    value with **no history-series endpoint**. Emitted as `score/<date>.csv` for
    online scoring, marked `history=false`. Never pasted across past dates.

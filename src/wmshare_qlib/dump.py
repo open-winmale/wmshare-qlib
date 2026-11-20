@@ -23,6 +23,41 @@ import pandas as pd
 from . import format
 
 
+def _append_vwap(panel: pd.DataFrame) -> pd.DataFrame:
+    """Derive ``vwap = amount / volume`` rows (dump-time, single point).
+
+    Qlib's bundled cn_data ships a ``$vwap`` field and Alpha158 consumes it; the
+    upstream kline surface has no vwap (verified 2026-11-20: bar rows carry
+    open/high/low/close/volume/amount/percent only). The stored ``volume`` is
+    ALREADY divided by the adjustment factor (see config ADJUSTMENT_MODES notes),
+    so ``amount / volume`` here is consistent with the adjusted (hfq) ``close``
+    and satisfies the same ``close * volume == amount`` invariant.
+
+    Rows with non-positive or missing volume (suspension days) are skipped -
+    the calendar reindex in dump_panel turns that into NaN, i.e. honest missing
+    data, never zeros. Called from dump_panel so bulk dumps, incremental
+    re-dumps and old fragment stores (which lack a vwap column) all emit it.
+    """
+    fields = set(panel["field"].unique())
+    if not {"amount", "volume"}.issubset(fields):
+        return panel
+    amount = panel.loc[panel["field"] == "amount", ["date", "instrument", "value"]]
+    volume = panel.loc[panel["field"] == "volume", ["date", "instrument", "value"]]
+    merged = amount.merge(volume, on=["date", "instrument"], suffixes=("_amount", "_volume"))
+    merged = merged[merged["value_volume"] > 0]
+    if merged.empty:
+        return panel
+    derived = pd.DataFrame(
+        {
+            "date": merged["date"],
+            "instrument": merged["instrument"],
+            "field": "vwap",
+            "value": merged["value_amount"] / merged["value_volume"],
+        }
+    )
+    return pd.concat([panel, derived], ignore_index=True)
+
+
 def build_calendar(panel: pd.DataFrame) -> list[str]:
     return sorted(panel["date"].unique().tolist())
 
@@ -55,6 +90,7 @@ def dump_panel(panel: pd.DataFrame, qlib_dir: str | Path, *, freq: str = "day") 
     if missing:
         raise ValueError(f"panel missing columns: {missing}")
 
+    panel = _append_vwap(panel)
     calendar = build_calendar(panel)
     cal_index = {d: i for i, d in enumerate(calendar)}
     write_calendar(qlib_dir, calendar)
