@@ -8,6 +8,55 @@ While on `0.x`, minor versions may change public API; patch versions will not.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-20
+
+### Fixed
+
+- **`[qlib]` extra installs a working environment.** The extra now pins
+  `pyarrow<26`: pyarrow 26.x requires numpy>=2 at runtime while declaring no
+  numpy constraint in its metadata, so combined with the extra's `numpy<2`
+  (pyqlib is built against 1.x) a plain `pip install 'wmshare-qlib[qlib]'`
+  resolved to `ImportError: pyarrow requires NumPy 2.0 or newer` and every
+  dump crashed in `to_parquet`. pyarrow 25.x is verified compatible with
+  numpy 1.26 (full suite green inside the extra). CI now proves it: the
+  `qlib-extra` job installs the extras with NO manual pins and runs the FULL
+  suite (the 0.5.0 job ran only the single qlib-marked test, which is how the
+  break shipped green).
+- **`--max-ec` is now actually required on every billed live path.** 0.5.0
+  documented it as required but only `update-history` enforced it. Missing
+  gates added: `dump-history --live` (guard sits after `--dry-run` — quoting
+  stays free), `reconcile-daily-basic --from-upstream` (the 0.5.0 changelog
+  claimed this gate existed; it ships now), and `write-universe --index
+  --live` (cost not yet probed upstream). Error messages now point at the
+  public README EC table instead of an internal docs path.
+
+### Changed
+
+- **Python 3.11 only.** `requires-python` is now `>=3.11,<3.12`: pyqlib 0.9.7
+  ships wheels only for 3.10–3.12, so the previous ">=3.11" claim let 3.13+
+  users install the core and then fail on the recommended `[qlib]` extra.
+  3.12+ is refused at install time instead. CI matrix collapsed accordingly.
+- Default `--symbols` universe fixed: the old `csi300_universe()` list
+  contained `002415`, which the demo snapshot does not serve, so a bare
+  `dump-history` failed on the very run it was meant to serve. Renamed to
+  `panel.demo_universe()` and set to the demo snapshot's real 10 codes.
+
+### Added
+
+- `wmshare-qlib --version` (CONTRIBUTING already told users to run it; it used
+  to exit 2).
+
+### Docs
+
+- README links are absolute GitHub URLs: PyPI renders only the README, where
+  every repo-relative link was dead.
+- `docs/data-model.md` corrected the `ScoreFileModel` import path and states
+  plainly that pyqlib 0.9.7's class is unreachable (broken upstream import);
+  the adapter's read-back uses the equivalent local reader, labelled
+  `local-equivalent`. FAQ now lists the demo universe's 10 codes.
+- CI installs wmshare at the declared floor (`>=2.5.0`) instead of the stale
+  `>=2.2.0`.
+
 ## [0.5.0] - 2026-11-20
 
 ### Added

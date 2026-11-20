@@ -1,7 +1,11 @@
 # CI: Tier-1 tests on every push/PR (zero Qlib, zero credentials, zero EC).
-# Tier-2 (pyqlib read-back) runs as a SEPARATE NON-BLOCKING job: the pyqlib
-# wheel is notoriously picky to install (needs numpy<2), so a red tier2 job
-# reports honestly in Actions history without blocking merges.
+# The qlib-extra job installs '.[qlib,test]' with NO manual constraints and runs
+# the FULL suite there (Qlib read-back included): the [qlib] extra must resolve
+# to a working environment on its own. That job is BLOCKING on purpose — 0.5.0
+# shipped a broken extra (pyarrow 26 needs numpy>=2 at runtime; the extra pins
+# numpy<2) while CI stayed green because tier2 ran only the single qlib-marked
+# test. If pyqlib's wheel ever becomes flaky to install, revisit this trade-off
+# before demoting the job.
 name: CI
 
 on:
@@ -12,22 +16,19 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.11"
 
-      # wmshare 2.2.0 from PyPI: the daily_basic facade, _fields client-side
-      # projection and BatchResult.truncated all ship there, so CI exercises
-      # the REAL adopted paths (not just the signature-fallback branch).
-      - name: Install wmshare (PyPI, 2.x floor)
-        run: pip install "wmshare>=2.2.0,<3"
+      # wmshare from PyPI at the floor pyproject.toml declares (2.5.0 ships the
+      # daily_basic facade, _fields client-side projection, BatchResult.truncated
+      # and the 10y valuation window), so CI exercises the REAL adopted paths
+      # (not just the signature-fallback branch).
+      - name: Install wmshare (PyPI, declared floor)
+        run: pip install "wmshare>=2.5.0,<3"
 
       - name: Install package + test deps
         run: pip install -e '.[test]'
@@ -49,7 +50,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
 
       - name: Build sdist and wheel
         run: |
@@ -105,10 +106,14 @@ jobs:
             grep -q "$cmd" /tmp/help.txt || { echo "::error::$cmd missing from --help"; exit 1; }
           done
           echo "all seven subcommands present"
+          /tmp/wheelvenv/bin/wmshare-qlib --version | grep -q . \
+            || { echo "::error::--version printed nothing"; exit 1; }
+          echo "--version ok: $(/tmp/wheelvenv/bin/wmshare-qlib --version)"
 
-  tier2:
-    # NON-BLOCKING pyqlib read-back (single version - see header comment).
-    continue-on-error: true
+  qlib-extra:
+    # BLOCKING: install the extras exactly as a user would (no manual pins) and
+    # run the FULL suite inside that environment, Qlib read-back included.
+    # Single interpreter: 3.11 — the only supported one (see header comment).
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -117,11 +122,11 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install wmshare (PyPI, 2.x floor)
-        run: pip install "wmshare>=2.2.0,<3"
+      - name: Install wmshare (PyPI, declared floor)
+        run: pip install "wmshare>=2.5.0,<3"
 
-      - name: Install package + pyqlib + pytest (needs numpy<2)
-        run: pip install -e '.[qlib,test]' "numpy<2"
+      - name: Install package + [qlib,test] extras (no manual pins)
+        run: pip install -e '.[qlib,test]'
 
-      - name: Tier-2 Qlib read-back (non-blocking)
-        run: PYTHONPATH=src python -m pytest tests -q -m qlib
+      - name: Full suite inside the qlib environment (incl. Qlib read-back)
+        run: PYTHONPATH=src python -m pytest tests -q -m "not live"

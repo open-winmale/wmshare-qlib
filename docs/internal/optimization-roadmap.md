@@ -203,7 +203,9 @@ README 声明 qfq 已复权所以 factor≡1，自洽但隐藏了一个正确性
 ### P1-3 工程信誉件（CI/重试/dry-run 等社区可见性基础件）
 
 > **状态：已实现（2026-11-17，Tier-1 79 passed / Tier-2 80 passed /
-> ruff 清洁）。** CI（`.github/workflows/ci.yml`：py3.10/3.12 矩阵，
+> ruff 清洁）。** CI（`.github/workflows/ci.yml`：当时为 py3.11/3.12 矩阵，
+> 0.6.0（2026-11-20）起收窄为 3.11 单版本；qlib-extra job 0.6.0 起改为阻断性
+> 全套回归——install extras 不带手工约束），
 > wmshare 从上游仓安装，ruff 0.14.4 锚定版本，Tier-1 only——Tier-2 仍是
 > 本地可选交叉验证）；README badge 已挂。
 

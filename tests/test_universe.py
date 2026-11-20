@@ -110,6 +110,19 @@ def test_index_members_live_only(tmp_path, monkeypatch):
         cli.cmd_write_universe(args)
 
 
+def test_cli_index_requires_max_ec(tmp_path):
+    """--index --live is a billed upstream read (cost not yet probed): no
+    budget, no fire. The guard sits before any client is built, so this needs
+    no credentials and touches no network."""
+    qlib_dir, _ = _dumped(tmp_path)
+    args = argparse.Namespace(qlib_dir=str(qlib_dir), name="csi300",
+                              index="index.hs300", codes_file=None, live=True,
+                              exclude_st=False, exclude_suspended=False,
+                              max_ec=None, freq="day")
+    with pytest.raises(SystemExit, match="max-ec"):
+        cli.cmd_write_universe(args)
+
+
 def test_index_members_stub_path_writes_universe(tmp_path, monkeypatch):
     qlib_dir, _ = _dumped(tmp_path)
     stub = _StubLiveClient(["600519", "000858", "300750"])  # 300750 not dumped
@@ -117,7 +130,7 @@ def test_index_members_stub_path_writes_universe(tmp_path, monkeypatch):
     args = argparse.Namespace(qlib_dir=str(qlib_dir), name="csi300",
                               index="index.hs300", codes_file=None, live=True,
                               exclude_st=False, exclude_suspended=False,
-                              max_ec=None, freq="day")
+                              max_ec=10_000, freq="day")
     cli.cmd_write_universe(args)
     lines = (qlib_dir / "instruments" / "csi300.txt").read_text().strip().splitlines()
     insts = {ln.split("\t")[0] for ln in lines}
@@ -244,7 +257,7 @@ def test_index_history_path_writes_pit_episodes(tmp_path, monkeypatch):
     args = argparse.Namespace(qlib_dir=str(qlib_dir), name="pit300",
                               index="index.hs300", codes_file=None, live=True,
                               exclude_st=False, exclude_suspended=False,
-                              max_ec=None, freq="day")
+                              max_ec=10_000, freq="day")
     cli.cmd_write_universe(args)
     lines = (qlib_dir / "instruments" / "pit300.txt").read_text().strip().splitlines()
     assert lines == [
@@ -261,7 +274,7 @@ def test_index_history_fallback_when_facade_missing(tmp_path, monkeypatch):
     args = argparse.Namespace(qlib_dir=str(qlib_dir), name="csi300",
                               index="index.hs300", codes_file=None, live=True,
                               exclude_st=False, exclude_suspended=False,
-                              max_ec=None, freq="day")
+                              max_ec=10_000, freq="day")
     cli.cmd_write_universe(args)
     lines = (qlib_dir / "instruments" / "csi300.txt").read_text().strip().splitlines()
     insts = {ln.split("\t")[0] for ln in lines}

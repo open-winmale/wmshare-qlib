@@ -5,7 +5,8 @@ path (no credentials, no cost), a little longer on the live path.
 
 ## 1. Requirements
 
-- **Python 3.11 or 3.12**
+- **Python 3.11** — the only supported interpreter (3.12+ is refused at install
+  time: pyqlib ships no wheels for it)
 - Optional but recommended: `pyqlib` (only needed to read `.bin` back with Qlib's
   own reader and to run the Alpha158 example)
 

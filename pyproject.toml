@@ -7,7 +7,7 @@ name = "wmshare-qlib"
 dynamic = ["version"]
 description = "Qlib-native data layer powered by wmshare: A-share history panels, score CSVs and instrument universes in Microsoft Qlib format"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.12"
 license = "BSD-3-Clause"
 license-files = ["LICENSE"]
 authors = [{ name = "open-winmale contributors" }]
@@ -30,7 +30,6 @@ classifiers = [
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
     "Topic :: Office/Business :: Financial :: Investment",
     "Topic :: Scientific/Engineering :: Information Analysis",
     "Typing :: Typed",
@@ -43,10 +42,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# pyqlib 0.9.x is built against numpy 1.x; installing it alongside numpy 2
-# resolves to a broken binary in some environments (evidenced in CI tier-2,
-# which pins "numpy<2" for the same reason).
-qlib = ["pyqlib>=0.9", "numpy<2"]
+# pyqlib 0.9.x is built against numpy 1.x, so the extra pins numpy<2. pyarrow
+# 26.x in turn requires numpy>=2 AT RUNTIME while declaring no numpy constraint
+# in its metadata, so this extra used to resolve to a broken import (measured
+# on 0.5.0: "ImportError: pyarrow requires NumPy 2.0 or newer, found 1.26.4").
+# pyarrow 25.x is the last line compatible with numpy 1.26 (verified 25.0.1),
+# hence the explicit cap. CI runs the FULL test suite inside this extra.
+qlib = ["pyqlib>=0.9", "numpy<2", "pyarrow<26"]
 test = ["pytest>=7"]
 
 [project.urls]

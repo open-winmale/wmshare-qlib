@@ -42,9 +42,15 @@ wmshare exposes roughly 2,750 **precomputed metric codes**. They return a *curre
 value. There is **no history-series endpoint** for them — verified against the SDK's
 screener/indicator surface, which accepts no date parameters.
 
-This adapter therefore emits them as `score/<date>.csv`, a format
-`qlib.contrib.model.ScoreFileModel` can consume for **online scoring**, and marks
-them `history=false`.
+This adapter therefore emits them as `score/<date>.csv`, a format Qlib's
+`ScoreFileModel` (`qlib.contrib.online.online_model`) can consume for **online
+scoring**, and marks them `history=false`.
+
+> Honesty note on the reader: pyqlib 0.9.7 ships `ScoreFileModel` with a broken
+> upstream import (`qlib.contrib.model.base` does not exist in the wheel), so the
+> adapter's read-back validates the CSV layout through an equivalent local reader
+> and labels that backend `local-equivalent` — never silently claiming the official
+> path ran.
 
 > This is the adapter's hardest red line: it will not paste today's value across
 > past dates to manufacture a series. A fabricated history is undetectable

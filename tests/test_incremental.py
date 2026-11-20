@@ -479,7 +479,28 @@ def test_reconcile_daily_basic_from_upstream(tmp_path, monkeypatch, capsys):
         store=str(store),
         symbols=None,
         tol=1e-6,
+        max_ec=10**9,  # required since 0.6.0: --from-upstream is a billed read
     )
     cli.cmd_reconcile_daily_basic(ns)  # must not raise: accumulated==upstream
     out = capsys.readouterr().out
     assert "[gate-b] PASS" in out
+
+
+def test_reconcile_from_upstream_requires_max_ec(tmp_path):
+    """The 0.5.0 changelog claimed this gate existed; it actually shipped in
+    0.6.0. --from-upstream bills rows-scanned daily_basic reads, so a missing
+    budget must refuse BEFORE any client/pull (no credentials needed here)."""
+    import argparse as _argparse
+
+    store, _manifest, _stub = _build_bulk(tmp_path)
+    ns = _argparse.Namespace(
+        accumulated=None,
+        upstream=None,
+        from_upstream=True,
+        store=str(store),
+        symbols=None,
+        tol=1e-6,
+        max_ec=None,
+    )
+    with pytest.raises(SystemExit, match="max-ec"):
+        cli.cmd_reconcile_daily_basic(ns)

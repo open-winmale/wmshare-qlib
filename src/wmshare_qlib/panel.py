@@ -184,10 +184,23 @@ def to_wide(panel: pd.DataFrame) -> pd.DataFrame:
     return wide.sort_values(["instrument", "date"]).reset_index(drop=True)
 
 
-def csi300_universe(n: int = 30) -> list[str]:
-    """Return a small deterministic universe for the MVP (demo has 10 stocks).
+def demo_universe() -> list[str]:
+    """The 10 codes of the wmshare demo snapshot (the default `--symbols`).
 
-    Uses a fixed slice of well-known codes present in demo snapshot where possible.
+    Mirrors ``wmshare._demo._UNIVERSE`` — every code here is guaranteed
+    dump-able in demo mode, so a bare ``dump-history`` (no ``--symbols``)
+    always works offline. (The previous list contained 002415, which the demo
+    snapshot does not serve, and rejected the very run it was meant to serve.)
     """
-    known = ["600519", "000858", "601318", "000001", "600036", "002415", "300750"]
-    return known[:n]
+    return [
+        "600519",
+        "000858",
+        "601088",
+        "600900",
+        "601318",
+        "000001",
+        "600036",
+        "000333",
+        "300750",
+        "688981",
+    ]

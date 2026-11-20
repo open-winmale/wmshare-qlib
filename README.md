@@ -3,7 +3,7 @@
 [![CI](https://github.com/open-winmale/wmshare-qlib/actions/workflows/ci.yml/badge.svg)](https://github.com/open-winmale/wmshare-qlib/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/wmshare-qlib.svg)](https://pypi.org/project/wmshare-qlib/)
 [![Python](https://img.shields.io/pypi/pyversions/wmshare-qlib.svg)](https://pypi.org/project/wmshare-qlib/)
-[![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](https://github.com/open-winmale/wmshare-qlib/blob/main/LICENSE)
 
 **wmshare-qlib turns [wmshare](https://github.com/open-winmale/wmshare) A-share market
 data into Microsoft Qlib-native format** — backtestable `.bin` panels,
@@ -22,7 +22,8 @@ pip install wmshare-qlib                 # core
 pip install 'wmshare-qlib[qlib]'         # + pyqlib, for .bin read-back verification
 ```
 
-Requires **Python 3.11+**. From source:
+Requires **Python 3.11** — the only supported interpreter (3.12+ is refused at
+install time; pyqlib ships no wheels for it). From source:
 
 ```bash
 git clone https://github.com/open-winmale/wmshare-qlib.git
@@ -56,8 +57,8 @@ wmshare-qlib accumulate --as-of 2026-11-16 --out ./out/cs_accum
 > re-captures it. Re-derive the date with `tail -1 out/qlib_data/calendars/day.txt`.
 > The demo covers 10 symbols, 120 kline bars and 30 moneyflow bars, stores only `pe`
 > (not `pb/ps/pr`), and is single-threaded — outside those bounds it fails loudly on
-> purpose. See [docs/getting-started.md](docs/getting-started.md) and
-> [docs/faq.md](docs/faq.md).
+> purpose. See [docs/getting-started.md](https://github.com/open-winmale/wmshare-qlib/blob/main/docs/getting-started.md) and
+> [docs/faq.md](https://github.com/open-winmale/wmshare-qlib/blob/main/docs/faq.md).
 
 ## Quick start B — live (real data, real EC)
 
@@ -87,7 +88,7 @@ Two rules worth knowing before you type them:
   spending anything. It is a budget ceiling, not a hint.
 - **A demo store cannot be grown incrementally.** Demo builds under `qfq_const`;
   appends need an immutable basis, so `update-history` refuses and tells you to
-  rebuild with `dump-history --live`. See [docs/faq.md](docs/faq.md#hfq-vs-qfq--which-one-and-why).
+  rebuild with `dump-history --live`. See [docs/faq.md](https://github.com/open-winmale/wmshare-qlib/blob/main/docs/faq.md#hfq-vs-qfq--which-one-and-why).
 
 `--dry-run` exists on `dump-history`, `update-history`, `dump-cross-section` and
 `accumulate`:
@@ -130,7 +131,7 @@ Only the first layer is backtestable today:
    time, with `--min-days` gating promotion to a backtestable panel.
 
 Full detail, including why layer 2 cannot be fixed client-side:
-[docs/data-model.md](docs/data-model.md).
+[docs/data-model.md](https://github.com/open-winmale/wmshare-qlib/blob/main/docs/data-model.md).
 
 ## Commands
 
@@ -231,7 +232,7 @@ pytest tests -q -m qlib
 Offline tests use `wmshare.demo_client()`, so they need no credentials. Tier 1
 verifies the dumped `.bin` with pure numpy (`format.read_bin_selfcheck`); Tier 2
 additionally reads it back through Qlib itself. Live tests are opt-in and gated by
-`WMSHARE_QLIB_LIVE=1` — see [CONTRIBUTING.md](CONTRIBUTING.md).
+`WMSHARE_QLIB_LIVE=1` — see [CONTRIBUTING.md](https://github.com/open-winmale/wmshare-qlib/blob/main/CONTRIBUTING.md).
 
 ## What we deliberately do NOT do
 
@@ -244,18 +245,18 @@ additionally reads it back through Qlib itself. Live tests are opt-in and gated 
 
 ## See also
 
-- [Getting started](docs/getting-started.md) — install to first `.bin`, demo then live.
-- [Data model](docs/data-model.md) — the three availability tiers and the EC model.
-- [FAQ](docs/faq.md) — demo boundaries, hfq vs qfq, error reference.
-- [Contributing](CONTRIBUTING.md) — tests, lint, and the red lines.
-- [Changelog](CHANGELOG.md)
+- [Getting started](https://github.com/open-winmale/wmshare-qlib/blob/main/docs/getting-started.md) — install to first `.bin`, demo then live.
+- [Data model](https://github.com/open-winmale/wmshare-qlib/blob/main/docs/data-model.md) — the three availability tiers and the EC model.
+- [FAQ](https://github.com/open-winmale/wmshare-qlib/blob/main/docs/faq.md) — demo boundaries, hfq vs qfq, error reference.
+- [Contributing](https://github.com/open-winmale/wmshare-qlib/blob/main/CONTRIBUTING.md) — tests, lint, and the red lines.
+- [Changelog](https://github.com/open-winmale/wmshare-qlib/blob/main/CHANGELOG.md)
 - [wmshare](https://github.com/open-winmale/wmshare) — the data SDK this adapter translates.
 - [wmshare-vnpy](https://github.com/open-winmale/wmshare-vnpy) — the same history panel
   injected into vnpy.alpha.
-- [Examples](examples/) — `dump_to_qlib.py`, `online_score.py`,
+- [Examples](https://github.com/open-winmale/wmshare-qlib/blob/main/examples/) — `dump_to_qlib.py`, `online_score.py`,
   `alpha158_lgbm.py`, `benchmark/`.
 - Design history and forward plans (engineering records, not user docs):
-  [docs/internal/](docs/internal/).
+  [docs/internal/](https://github.com/open-winmale/wmshare-qlib/blob/main/docs/internal/).
 
 ## Acknowledgements
 
@@ -265,4 +266,4 @@ optional verification dependency only.
 
 ## License
 
-BSD-3-Clause — see [LICENSE](LICENSE).
+BSD-3-Clause — see [LICENSE](https://github.com/open-winmale/wmshare-qlib/blob/main/LICENSE).

@@ -68,10 +68,16 @@ the *remaining* budget with an upper bound that only grows.
 
 ## The demo only has 10 symbols and I get "symbols outside universe"
 
-Correct and intentional. The demo snapshot covers 10 A-share codes, 120 kline bars
-and 30 moneyflow bars, and stores only `pe` (not `pb/ps/pr`). It exists to prove the
-pipeline offline, not to run research. Point at `--live` with credentials for a real
-universe.
+Correct and intentional. The demo snapshot covers exactly these 10 A-share codes
+(the same list a bare `dump-history` with no `--symbols` dumps):
+
+```
+600519 000858 601088 600900 601318 000001 600036 000333 300750 688981
+```
+
+Depth is 120 kline bars and 30 moneyflow bars, and the valuation surface stores
+only `pe` (not `pb/ps/pr`). The demo exists to prove the pipeline offline, not to
+run research. Point at `--live` with credentials for a real universe.
 
 ## Where do my demo dates come from?
 

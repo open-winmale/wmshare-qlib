@@ -1,4 +1,5 @@
-"""CLI: dump-history / update-history / dump-cross-section / accumulate / verify."""
+"""CLI: dump-history / update-history / dump-cross-section / accumulate /
+write-universe / reconcile-daily-basic / verify."""
 
 from __future__ import annotations
 
@@ -9,7 +10,18 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import config, cross_section, dump, estimate, fetch, normalize, panel, qlib_io, resume
+from . import (
+    __version__,
+    config,
+    cross_section,
+    dump,
+    estimate,
+    fetch,
+    normalize,
+    panel,
+    qlib_io,
+    resume,
+)
 
 DEFAULT_DUMP_N = 120
 
@@ -56,7 +68,7 @@ def _print_cross_section_estimate(args: argparse.Namespace) -> None:
 
 
 def cmd_dump_history(args: argparse.Namespace) -> None:
-    symbols = args.symbols or panel.csi300_universe()
+    symbols = args.symbols or panel.demo_universe()
     store = args.store or str(Path(args.out) / "_resume")
     try:
         adjust_mode = config.adjustment_mode(bool(args.live), args.adjust)
@@ -107,8 +119,8 @@ def cmd_dump_history(args: argparse.Namespace) -> None:
                     ),
                     "deep_history_note": (
                         f"n={args.n} > 500 served bars: per-bar pricing is EXTRAPOLATED "
-                        f"beyond the 500-bar probe (linear fit, roadmap §2.5) - probe "
-                        f"pending; treat the estimate as a lower bound until re-probed"
+                        f"beyond the 500-bar probe (linear fit over the measured "
+                        f"anchors) - treat the estimate as a lower bound until re-probed"
                         if args.live and args.n > 500
                         else None
                     ),
@@ -120,6 +132,12 @@ def cmd_dump_history(args: argparse.Namespace) -> None:
             ),
         )
         return
+    if args.live and args.max_ec is None:
+        raise SystemExit(
+            "dump-history --live requires --max-ec: bulk kline bills per symbol "
+            "(adj+raw = 2x(156+67n) EC, valuation adds ~712 EC per metric); "
+            "use --dry-run to estimate the spend without firing anything"
+        )
     fields = config.HISTORY_FIELDS
     if getattr(args, "daily_basic", False):
         fields = fields + config.PANEL_DAILY_BASIC_FIELDS
@@ -239,8 +257,8 @@ def cmd_update_history(args: argparse.Namespace) -> None:
     if args.max_ec is None:
         raise SystemExit(
             "update-history requires --max-ec: tails bill per symbol "
-            "(kline adj+raw = 2x(156+67k) EC, deterministic; see "
-            "docs/optimization-roadmap.md section 2.5)"
+            "(kline adj+raw = 2x(156+67k) EC, deterministic; see the README "
+            "'EC cost model' table)"
         )
     store = args.store or str(Path(args.out) / "_resume")
     manifest = resume.load_manifest(store)
@@ -522,6 +540,11 @@ def cmd_write_universe(args: argparse.Namespace) -> None:
             raise SystemExit(
                 "--index requires --live (demo client has no indices namespace; verified offline)"
             )
+        if args.max_ec is None:
+            raise SystemExit(
+                "--index --live requires --max-ec: index membership is a billed "
+                "upstream read (cost not yet probed); declare a ceiling before firing"
+            )
         client0 = fetch._client(live=True)
         # PIT episodes preferred: the upstream materialized table accumulates one
         # membership snapshot per day (forward-PIT; earlier history does not
@@ -746,6 +769,12 @@ def cmd_reconcile_daily_basic(args: argparse.Namespace) -> None:
     if getattr(args, "from_upstream", False):
         if not args.store:
             raise SystemExit("--from-upstream requires --store (resume store dir)")
+        if getattr(args, "max_ec", None) is None:
+            raise SystemExit(
+                "--from-upstream requires --max-ec: official daily_basic reads bill "
+                "by rows scanned (per-call floor + ~23 EC/doc; see the README "
+                "'EC cost model' table)"
+            )
         manifest = resume.load_manifest(args.store)
         symbols = args.symbols or sorted(manifest["symbols"].keys())
         full = resume.load_panel_with_tail(args.store, manifest)
@@ -849,6 +878,7 @@ def cmd_verify(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="wmshare-qlib")
+    p.add_argument("--version", action="version", version=f"wmshare-qlib {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     h = sub.add_parser("dump-history", help="fetch history and dump Qlib .bin")
@@ -875,7 +905,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-ec",
         type=float,
         default=None,
-        help="hard EC ceiling; stop submitting symbols once reached (batch granularity)",
+        help="hard EC ceiling (REQUIRED with --live); stop submitting symbols "
+        "once reached (batch granularity)",
     )
     h.add_argument(
         "--resume", action="store_true", help="reuse cached fragments, skip already-fetched symbols"

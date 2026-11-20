@@ -14,7 +14,7 @@ import argparse
 import pytest
 import wmshare
 
-from wmshare_qlib import cli, config, estimate, fetch
+from wmshare_qlib import cli, config, estimate, fetch, normalize, panel
 
 
 # --- fake SDK error module ----------------------------------------------------
@@ -408,6 +408,61 @@ def test_years_and_n_are_mutually_exclusive(tmp_path):
     )
     with pytest.raises(SystemExit, match="mutually exclusive"):
         cli.cmd_dump_history(args)
+
+
+def test_live_dump_history_requires_max_ec(tmp_path):
+    """README promises `--max-ec` is required on billed paths; 0.5.0 shipped
+    dump-history without the guard and a bare live call billed real EC. The
+    guard sits AFTER the --dry-run branch (quoting needs no budget) and is
+    live-gated, so demo runs and --dry-run stay free and guard-less."""
+    args = argparse.Namespace(
+        symbols=["600519"],
+        live=True,
+        n=60,
+        freq="day",
+        out=str(tmp_path / "o"),
+        store=None,
+        workers=1,
+        max_ec=None,
+        adjust=None,
+        resume=False,
+        dry_run=False,
+    )
+    with pytest.raises(SystemExit, match="max-ec"):
+        cli.cmd_dump_history(args)
+
+
+def test_bare_dump_history_defaults_to_demo_universe(tmp_path):
+    """Omitting --symbols must produce a panel the demo snapshot can actually
+    serve: 0.5.0's default list contained 002415, which the demo universe does
+    not include, so the very run it was meant to serve failed loudly."""
+    out = tmp_path / "out"
+    args = argparse.Namespace(
+        symbols=None,
+        live=False,
+        n=30,
+        freq="day",
+        out=str(out),
+        store=None,
+        workers=1,
+        max_ec=None,
+        adjust=None,
+        resume=False,
+        dry_run=False,
+    )
+    cli.cmd_dump_history(args)
+    all_txt = (out / "instruments" / "all.txt").read_text(encoding="utf-8")
+    assert len(all_txt.strip().splitlines()) == 10, "the demo universe is 10 codes"
+    assert (out / "fetch_meta.json").exists()
+
+
+def test_demo_universe_subset_of_demo_snapshot():
+    """Contract with the SDK: every default code must be in the demo
+    stocks.list (offline, free - the map is built from the demo client)."""
+    client = fetch._client(live=False)
+    instrument_map = normalize.build_instrument_map(client)
+    missing = [c for c in panel.demo_universe() if c not in instrument_map]
+    assert not missing, f"default codes absent from the demo snapshot: {missing}"
 
 
 def test_tail_symbol_quotes_windowed_daily_basic():
