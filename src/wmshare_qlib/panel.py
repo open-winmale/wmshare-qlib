@@ -129,6 +129,7 @@ def assert_panel_integrity(panel: pd.DataFrame) -> dict:
     # the anchor price dates per instrument; a systematic offset fails loud.
     alignment = assert_dates_aligned_across_fields(panel)
     issues.extend(alignment["issues"])
+    stale_fields = alignment.get("stale", [])
     # Factor gate (P0-2'): per instrument the cumulative adjustment factor must
     # be positive and NON-DECREASING along dates. hfq_factor emits the real
     # hfq/raw ratio (jumps UP at ex-div dates only); qfq_const emits 1.0 and
@@ -161,6 +162,7 @@ def assert_panel_integrity(panel: pd.DataFrame) -> dict:
         "instruments": int(panel["instrument"].nunique()),
         "null_values": nas,
         "date_alignment": alignment["coverage"],
+        "stale_fields": stale_fields,
     }
 
 
