@@ -20,6 +20,16 @@ While on `0.x`, minor versions may change public API; patch versions will not.
 
 ### Added
 
+- **PIT index-universe episodes.** `write-universe --index` now prefers the
+  upstream materialized membership-snapshot table (`index.members_history`,
+  wmshare ≥ next release): daily membership snapshots are folded into
+  per-instrument episodes (`dump.universe_episodes_from_history`) and written as
+  multi-row Qlib instruments files — `D.instruments("<name>")` resolves
+  membership point-in-time, and dropped members keep their closed episodes
+  (survivorship-safe). Forward-PIT only: earlier history does not exist
+  upstream. SDKs without the facade fall back to the previous single-snapshot
+  path. Hygiene flags are ignored (and warned) on this path — filtering by
+  today's ST/suspension state would rewrite history.
 - **`$vwap` field.** The dumper derives `vwap = amount / volume` at dump time
   (`dump._append_vwap`); the upstream kline surface has no vwap. Stored volume
   is already divided by the adjustment factor, so the quotient is consistent

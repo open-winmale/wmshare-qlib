@@ -181,3 +181,63 @@ def write_universe_file(
     lines = [f"{inst}\t{start}\t{end}" for inst, (start, end) in sorted(ranges.items())]
     out.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
     return out
+
+
+def universe_episodes_from_history(
+    history: dict[str, set[str]],
+) -> dict[str, list[tuple[str, str]]]:
+    """Fold daily membership snapshots into per-instrument episodes (PIT).
+
+    ``history`` maps ISO day -> the set of members on that day (ascending days
+    enforced by sorting here). PIT semantics:
+
+    - an instrument that stays a member extends its OPEN episode;
+    - a re-entry after a gap opens a NEW episode (Qlib instruments natively
+      support multiple rows per instrument, and ``D.instruments`` resolves
+      membership point-in-time from them);
+    - episodes of dropped members stay CLOSED at their last seen day and are
+      never deleted - that is the whole point of a point-in-time universe
+      (deleting them would silently reintroduce survivorship bias).
+
+    Pure function: no I/O, offline-testable.
+    """
+    episodes: dict[str, list[tuple[str, str]]] = {}
+    prev: set[str] | None = None
+    for day in sorted(history):
+        cur = set(history[day])
+        for inst in sorted(cur):
+            open_ep = episodes.get(inst)
+            if prev is not None and inst in prev and open_ep:
+                start, _end = open_ep[-1]
+                open_ep[-1] = (start, day)
+            else:
+                episodes.setdefault(inst, []).append((day, day))
+        prev = cur
+    return episodes
+
+
+def write_universe_episodes_file(
+    qlib_dir: str | Path,
+    name: str,
+    episodes: dict[str, list[tuple[str, str]]],
+) -> Path:
+    """Write ``instruments/<name>.txt`` with per-instrument membership episodes.
+
+    Same on-disk convention as :func:`write_universe_file` (one ``INST\\tstart\\tend``
+    row per episode; Qlib resolves PIT membership from multiple rows per
+    instrument). Rows are sorted for deterministic diffs.
+    """
+    import re
+
+    if not re.fullmatch(r"[A-Za-z0-9_\-]+", name):
+        raise ValueError(f"universe name {name!r} must be [A-Za-z0-9_-]+")
+    inst_dir = Path(qlib_dir) / "instruments"
+    inst_dir.mkdir(parents=True, exist_ok=True)
+    out = inst_dir / f"{name}.txt"
+    lines = [
+        f"{inst}\t{start}\t{end}"
+        for inst in sorted(episodes)
+        for (start, end) in episodes[inst]
+    ]
+    out.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    return out

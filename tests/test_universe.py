@@ -179,3 +179,90 @@ def test_cli_hygiene_requires_live_and_max_ec(tmp_path):
         cli.cmd_write_universe(argparse.Namespace(**base))
     with pytest.raises(SystemExit, match="max-ec"):
         cli.cmd_write_universe(argparse.Namespace(**{**base, "live": True}))
+
+
+# --- PIT episodes (index.members_history path) ---------------------------------
+def test_universe_episodes_from_history_pit_semantics():
+    h = {
+        "2026-01-05": {"A", "B"},
+        "2026-01-06": {"A", "C"},   # B dropped, C new
+        "2026-01-07": {"A"},        # C dropped
+        "2026-01-08": {"A", "B"},   # B re-enters → NEW episode
+    }
+    eps = dump.universe_episodes_from_history(h)
+    assert eps["A"] == [("2026-01-05", "2026-01-08")], "continuous member extends one episode"
+    assert eps["B"] == [("2026-01-05", "2026-01-05"), ("2026-01-08", "2026-01-08")], \
+        "re-entry opens a new episode; the old one stays CLOSED (never deleted)"
+    assert eps["C"] == [("2026-01-06", "2026-01-06")], "dropped member keeps its closed episode"
+
+
+def test_universe_episodes_empty_history():
+    assert dump.universe_episodes_from_history({}) == {}
+
+
+def test_write_universe_episodes_file_multi_row(tmp_path):
+    qlib_dir, _ = _dumped(tmp_path)
+    eps = {"SH600519": [("2026-01-05", "2026-01-20"), ("2026-02-03", "2026-02-10")],
+           "SZ000858": [("2026-01-05", "2026-02-10")]}
+    out = dump.write_universe_episodes_file(qlib_dir, "pit300", eps)
+    lines = out.read_text().strip().splitlines()
+    assert lines == [
+        "SH600519\t2026-01-05\t2026-01-20",
+        "SH600519\t2026-02-03\t2026-02-10",
+        "SZ000858\t2026-01-05\t2026-02-10",
+    ]
+    with pytest.raises(ValueError, match="name"):
+        dump.write_universe_episodes_file(qlib_dir, "../evil", eps)
+
+
+class _StubIndexHistoryApi:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def members_history(self, key, begin="", end=""):
+        return {"ok": True, "as_of": "2026-01-08", "data": self._rows, "meta": {}}
+
+
+class _StubHistoryClient(_StubLiveClient):
+    def __init__(self, member_codes, rows):
+        super().__init__(member_codes)
+        self.index = _StubIndexHistoryApi(rows)
+
+
+def test_index_history_path_writes_pit_episodes(tmp_path, monkeypatch):
+    """members_history available → episodes folded from history, not snapshot."""
+    qlib_dir, _ = _dumped(tmp_path)  # panel covers SH600519/SZ000858/SH601318
+    rows = []
+    for day, members in (("2026-01-05", ["600519", "000858", "300750"]),
+                         ("2026-01-06", ["600519", "300750"])):
+        for sym in members:
+            rows.append({"date": day, "symbol": sym, "name": "", "mv": 1.0, "weight": 0.01})
+    # 300750 has no dumped data → dropped; 000858 dropped from index on 01-06 but
+    # its closed episode 01-05..01-05 must SURVIVE in the file.
+    stub = _StubHistoryClient(["600519"], rows)
+    monkeypatch.setattr(cli.fetch, "_client", lambda live: stub)
+    args = argparse.Namespace(qlib_dir=str(qlib_dir), name="pit300",
+                              index="index.hs300", codes_file=None, live=True,
+                              exclude_st=False, exclude_suspended=False,
+                              max_ec=None, freq="day")
+    cli.cmd_write_universe(args)
+    lines = (qlib_dir / "instruments" / "pit300.txt").read_text().strip().splitlines()
+    assert lines == [
+        "SH600519\t2026-01-05\t2026-01-06",
+        "SZ000858\t2026-01-05\t2026-01-05",
+    ], "PIT episodes: member dropped from index keeps its closed episode"
+
+
+def test_index_history_fallback_when_facade_missing(tmp_path, monkeypatch):
+    """SDK without index.members_history → old single-snapshot path unchanged."""
+    qlib_dir, _ = _dumped(tmp_path)
+    stub = _StubLiveClient(["600519", "000858", "300750"])  # no .index namespace
+    monkeypatch.setattr(cli.fetch, "_client", lambda live: stub)
+    args = argparse.Namespace(qlib_dir=str(qlib_dir), name="csi300",
+                              index="index.hs300", codes_file=None, live=True,
+                              exclude_st=False, exclude_suspended=False,
+                              max_ec=None, freq="day")
+    cli.cmd_write_universe(args)
+    lines = (qlib_dir / "instruments" / "csi300.txt").read_text().strip().splitlines()
+    insts = {ln.split("\t")[0] for ln in lines}
+    assert insts == {"SH600519", "SZ000858"}

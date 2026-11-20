@@ -140,7 +140,7 @@ Full detail, including why layer 2 cannot be fixed client-side:
 | `update-history` | incremental daily tails → reconcile → re-dump (live + hfq only) | `--max-ec` (required) `--tail-overlap --valuation-days` |
 | `dump-cross-section` | today's score CSV | `--via screener/snapshot --idx --max-ec` |
 | `accumulate` | append one daily PIT snapshot (prints availability + promotion status) | same dispatch + `--min-days` |
-| `write-universe` | `instruments/<name>.txt` from index membership or a codes file | `--index/--codes-file --exclude-st --exclude-suspended` |
+| `write-universe` | `instruments/<name>.txt` from index membership or a codes file; `--index` prefers PIT membership episodes when the SDK exposes `index.members_history` (one episode per membership run; dropped members keep their closed episode — survivorship-safe) | `--index/--codes-file --exclude-st --exclude-suspended` |
 | `verify` | read `.bin` back with Qlib's own reader | `--qlib-dir --check inst:field:date:value` |
 | `reconcile-daily-basic` | Gate B: accumulated PIT vs official daily_basic history (100% or fail) | `--accumulated --upstream --tol`, or `--from-upstream --store --max-ec` |
 

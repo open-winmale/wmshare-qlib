@@ -516,16 +516,66 @@ def cmd_write_universe(args: argparse.Namespace) -> None:
             f"no dumped panel at {qlib_dir} (missing instruments/all.txt); run dump-history first"
         )
     codes: list[str] = []
+    history_sets: dict[str, set[str]] | None = None
     if args.index:
         if not args.live:
             raise SystemExit(
                 "--index requires --live (demo client has no indices namespace; verified offline)"
             )
-        result = fetch.fetch_index_members(fetch._client(live=True), args.index)
-        codes = result.frame["symbol"].astype(str).tolist()
-        print("[metering]", json.dumps(result.metering.as_meta(), ensure_ascii=False))
-        for w in result.warnings[:5]:
-            print("[warn]", w)
+        client0 = fetch._client(live=True)
+        # PIT episodes preferred: the upstream materialized table accumulates one
+        # membership snapshot per day (forward-PIT; earlier history does not
+        # exist upstream). SDK lacking index.members_history -> fall back to the
+        # current-members single-snapshot path below (behavior unchanged).
+        hist_fn = None
+        idx_api = getattr(client0, "index", None)
+        if idx_api is not None:
+            hist_fn = getattr(idx_api, "members_history", None)
+        envelope = None
+        if hist_fn is not None:
+            try:
+                envelope = hist_fn(args.index)
+            except Exception as exc:  # noqa: BLE001 - degrade loudly, keep working
+                print(
+                    "[warn]",
+                    f"members_history failed ({type(exc).__name__}: {str(exc)[:80]}); "
+                    "falling back to current-members snapshot (episode boundaries "
+                    "degrade to this run's date)",
+                )
+                envelope = None
+        if (
+            isinstance(envelope, dict)
+            and envelope.get("ok")
+            and isinstance(envelope.get("data"), list)
+            and envelope["data"]
+        ):
+            history_sets = {}
+            for row in envelope["data"]:
+                day = str(row.get("date") or "")[:10]
+                sym = str(row.get("symbol") or "").strip()
+                if day and sym:
+                    history_sets.setdefault(day, set()).add(sym)
+            if not history_sets:
+                history_sets = None
+            else:
+                print(
+                    "[universe-history]",
+                    json.dumps(
+                        {
+                            "days": len(history_sets),
+                            "as_of": str(envelope.get("as_of") or ""),
+                            "note": "PIT episodes; earlier history does not exist "
+                            "upstream (forward-PIT only)",
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+        if history_sets is None:
+            result = fetch.fetch_index_members(client0, args.index)
+            codes = result.frame["symbol"].astype(str).tolist()
+            print("[metering]", json.dumps(result.metering.as_meta(), ensure_ascii=False))
+            for w in result.warnings[:5]:
+                print("[warn]", w)
     elif args.codes_file:
         codes = [
             ln.strip()
@@ -534,7 +584,7 @@ def cmd_write_universe(args: argparse.Namespace) -> None:
         ]
     else:
         raise SystemExit("one of --index <key> or --codes-file <path> is required")
-    if not codes:
+    if not codes and history_sets is None:
         raise SystemExit("universe source produced no codes")
 
     # hygiene guards BEFORE any client creation: the CLI must fail fast on
@@ -563,6 +613,76 @@ def cmd_write_universe(args: argparse.Namespace) -> None:
             unmapped.append(code)
     if unmapped:
         print("[warn]", f"{len(unmapped)} code(s) unmapped (dropped): {unmapped[:5]}")
+
+    if history_sets is not None:
+        # PIT episode path: fold membership history into per-instrument episodes.
+        # Hygiene flags are deliberately NOT applied here - filtering by TODAY's
+        # ST/suspension state would rewrite history (survivorship bias).
+        if args.exclude_st or args.exclude_suspended:
+            print(
+                "[warn]",
+                "--exclude-st/--exclude-suspended ignored on the PIT history path: "
+                "filtering by today's state would rewrite membership history",
+            )
+        hist_inst: dict[str, set[str]] = {}
+        unmapped_hist: set[str] = set()
+        for day, members in history_sets.items():
+            kept: set[str] = set()
+            for code in members:
+                c = code.upper()
+                if c[:2] in {"SH", "SZ", "BJ"} and c[2:].isdigit():
+                    kept.add(c)
+                elif code in instrument_map:
+                    kept.add(instrument_map[code])
+                else:
+                    unmapped_hist.add(code)
+            hist_inst[day] = kept
+        if unmapped_hist:
+            print(
+                "[warn]",
+                f"{len(unmapped_hist)} historical code(s) unmapped (dropped): "
+                f"{sorted(unmapped_hist)[:5]}",
+            )
+        episodes = dump.universe_episodes_from_history(hist_inst)
+        ranges = dump.instrument_date_ranges(qlib_dir, freq=args.freq)
+        covered_eps = {inst: eps for inst, eps in episodes.items() if inst in ranges}
+        missing_eps = sorted(set(episodes) - set(ranges))
+        if missing_eps:
+            print(
+                "[warn]",
+                f"{len(missing_eps)} episode instrument(s) not in the dumped panel "
+                f"(dropped, e.g. {missing_eps[:5]})",
+            )
+        early = {
+            inst: eps[0][0]
+            for inst, eps in covered_eps.items()
+            if eps[0][0] < ranges[inst][0]
+        }
+        if early:
+            print(
+                "[warn]",
+                f"{len(early)} instrument(s) have membership episodes starting before "
+                f"the dumped data (e.g. {list(early.items())[:3]}); Qlib reads NaN "
+                "outside data coverage - clip by narrowing the dump window if needed",
+            )
+        if not covered_eps:
+            raise SystemExit("no universe member has dumped data; nothing to write")
+        out = dump.write_universe_episodes_file(qlib_dir, args.name, covered_eps)
+        print(
+            "[universe]",
+            json.dumps(
+                {
+                    "path": str(out),
+                    "name": args.name,
+                    "written": len(covered_eps),
+                    "episodes": sum(len(v) for v in covered_eps.values()),
+                    "source": "index-history",
+                    "hygiene": False,
+                },
+                ensure_ascii=False,
+            ),
+        )
+        return
 
     if args.exclude_st or args.exclude_suspended:
         hyg = fetch.filter_universe_hygiene(
