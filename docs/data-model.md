@@ -20,7 +20,7 @@ and are immediately usable in a backtest:
 | `open/high/low/close/volume/amount` | `kline.bars` | full served window (`--n`/`--years`) |
 | `factor` | derived from adj+raw in the same call | same window |
 | `vwap` | derived at dump time: `amount / volume` | same window |
-| `pe/pb/ps/pr` | `valuation.hist_stats` | **≤ 3 years** (server cap) |
+| `pe/pb/ps/pr` | `valuation.hist_stats` | 3y default (`config.VALUATION_WINDOW`; the engine serves up to 10y — 600519 pe 10y = 2,450 daily points, live-probed 2026-11-20 — flip the knob once wmshare ≥ 2.5.0 ships) |
 | `net_mf/elg_net/lg_net/md_net/sm_net` | `moneyflow.bars` | served window |
 | `pe_ttm/total_mv/circ_mv/turnover_rate/dv_ttm` | `valuation.daily_basic` (`--daily-basic`) | server-materialized, grows one day at a time |
 

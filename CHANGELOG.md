@@ -10,6 +10,16 @@ While on `0.x`, minor versions may change public API; patch versions will not.
 
 ### Added
 
+- **`config.VALUATION_WINDOW`** (default `"3y"`). The valuation `pe/pb/ps/pr`
+  series window is now a knob. The engine itself has no year cap — kernel
+  `parseWindow` accepts any `Ny/Nq/Nm`; live probe 2026-11-20 returned 2,450
+  daily pe points (2016-11-21 → now) for `window="10y"`. The old "3y cap" was
+  an SDK allowlist, relaxed upstream in lockstep. Flip to `"10y"` once
+  wmshare ≥ 2.5.0 (relaxed allowlist) ships; the window is recorded in the
+  store manifest params for audit.
+
+### Added
+
 - **`$vwap` field.** The dumper derives `vwap = amount / volume` at dump time
   (`dump._append_vwap`); the upstream kline surface has no vwap. Stored volume
   is already divided by the adjustment factor, so the quotient is consistent

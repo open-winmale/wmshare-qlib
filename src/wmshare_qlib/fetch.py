@@ -203,7 +203,8 @@ def _valuation_frames(
             continue
         try:
             payload = call_with_retry(
-                lambda vf=vfield: c.valuation.hist_stats(symbol, metric=vf, window="3y"),
+                lambda vf=vfield: c.valuation.hist_stats(
+                    symbol, metric=vf, window=config.VALUATION_WINDOW),
                 label=f"{symbol}/{vfield}",
                 meter_cb=meter_cb,
                 warn_cb=warnings.append,

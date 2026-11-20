@@ -129,6 +129,7 @@ def cmd_dump_history(args: argparse.Namespace) -> None:
         "live": bool(args.live),
         "freq": args.freq,
         "adjust": adjust_mode,
+        "valuation_window": config.VALUATION_WINDOW,
     }
     manifest = resume.init_manifest(store, params=params, resume=args.resume)
     todo = resume.pending_symbols(symbols, manifest)
