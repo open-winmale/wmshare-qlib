@@ -9,6 +9,8 @@ major versions.
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-11-25
+
 ### Changed (BREAKING)
 
 - The supported upstream window moves to **`wmshare>=4.0,<5`** (was
