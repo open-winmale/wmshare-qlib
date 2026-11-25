@@ -13,7 +13,7 @@ dated series). We never fabricate history by pasting today's value across
 dates.
 """
 
-__version__ = "0.8.1"
+__version__ = "1.0.0"
 
 # Imported so ``wmshare_qlib.qlib_io`` (etc.) resolves without an explicit
 # submodule import, matching what __all__ promises. Import cost is small and
