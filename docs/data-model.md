@@ -113,7 +113,7 @@ run:
 
 - `credentials` — the caller's own account (configured via env vars or
   `~/.wmshare/credentials.env`).
-- `public_pool` — the **free trial** (wmshare >=3.3): no credentials, requests
+- `public_pool` — the **free trial** (wmshare >=4): no credentials, requests
   carry no token, and the quota is **shared by every unregistered caller of
   your source network**. Its rate/quota refusals
   (`ip_rate_limited`, `pool_unavailable`, `ip_banned`) are terminal — the

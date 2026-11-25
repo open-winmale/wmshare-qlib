@@ -38,7 +38,7 @@ pip install -e '.[qlib]'
 ## 3. First panel on the free trial (zero credentials)
 
 With no credentials configured, every client is a **public-pool free-trial
-client** (wmshare >=3.3): real data, no token, drawn from a quota **shared by
+client** (wmshare >=4): real data, no token, drawn from a quota **shared by
 all unregistered callers of your network**. Start with a dry-run, then a tiny
 panel:
 

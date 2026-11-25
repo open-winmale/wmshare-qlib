@@ -76,7 +76,7 @@ up where it left off.
 
 ## What is the public-pool free trial / why am I "public_pool" in fetch_meta?
 
-wmshare >=3.3 serves unregistered callers from a **public pool**: no credentials,
+wmshare >=4 serves unregistered callers from a **public pool**: no credentials,
 no token, and a quota **shared by every unregistered caller of your source
 network**, metered like any other client. `fetch_meta.json` records it as
 `metering.auth_mode == "public_pool"` (vs `"credentials"` for your own account,

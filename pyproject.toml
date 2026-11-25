@@ -35,9 +35,11 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    # >=3.3.0: the public-pool free trial + client.auth_mode (3.3.0); the 2.x
-    # line is past EOL for this adapter (its demo_client was removed in 3.0).
-    "wmshare>=3.3.0,<4",
+    # >=4.0: the upstream line reset (4.0.0 = MAJOR over the 3.7.1 end-of-line,
+    # functionally identical) is the only supported line; the public-pool free
+    # trial + client.auth_mode ship since 3.3.0 and carry over unchanged. The
+    # 2.x line (demo_client removed in 3.0) is long past EOL for this adapter.
+    "wmshare>=4.0,<5",
     "pandas>=2.0",
     "pyarrow>=14",
     "numpy>=1.24",

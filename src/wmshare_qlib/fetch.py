@@ -157,8 +157,8 @@ class Metering:
 
     ``auth_mode`` records WHICH client ran: ``credentials`` (the caller's own
     account), ``public_pool`` (free trial), or ``cache_hit`` (bookkeeping-only
-    metering, no client was built). wmshare >=3.3.0 exposes the same
-    discriminator as ``client.auth_mode``.
+    metering, no client was built). wmshare exposes the same
+    discriminator as ``client.auth_mode`` (shipped in 3.3.0).
 
     ``ec_cost`` is the upstream-reported spend accumulator - INTERNAL guard
     state read by the ``max_ec`` executor. It is deliberately NOT part of
@@ -184,8 +184,8 @@ class Metering:
 def _auth_mode(client: Any) -> str:
     """Which client pays for this call (client-side probe, never a guess).
 
-    wmshare >=3.3.0 exposes ``auth_mode`` ("credentials" / "public_pool");
-    older SDKs and stubs without the attribute are treated as credentialed.
+    wmshare exposes ``auth_mode`` ("credentials" / "public_pool");
+    stubs without the attribute are treated as credentialed.
     """
     return str(getattr(client, "auth_mode", "") or "credentials")
 
@@ -204,7 +204,7 @@ def _client(
 
     Credential resolution is entirely the SDK's: explicit args > env vars >
     credentials file. With NO credentials at all, ``Client.from_env`` returns
-    a public-pool free-trial client (wmshare >=3.3.0; ``auth_mode ==
+    a public-pool free-trial client (``auth_mode ==
     "public_pool"``, shared quota, metered like any other client).
     ``anonymous=True`` forces that mode and IGNORES configured credentials
     (mirrors the SDK CLI's ``--anonymous``).

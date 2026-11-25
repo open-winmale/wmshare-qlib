@@ -23,11 +23,11 @@ jobs:
         with:
           python-version: "3.11"
 
-      # wmshare resolves to the NEWEST 3.x from PyPI (measured 2026-11-24:
-      # 3.5.0), i.e. these jobs exercise the supported path, not the declared
-      # floor. The `floor` job below pins 3.3.0 for that.
-      - name: Install wmshare (PyPI, newest 3.x)
-        run: pip install "wmshare>=3.3.0,<4"
+      # wmshare resolves to the NEWEST 4.x from PyPI (measured 2026-11-25:
+      # 4.2.2), i.e. these jobs exercise the supported path, not the declared
+      # floor. The `floor` job below pins 4.0.0 for that.
+      - name: Install wmshare (PyPI, newest 4.x)
+        run: pip install "wmshare>=4.0,<5"
 
       - name: Install package + test deps
         run: pip install -e '.[test]'
@@ -42,10 +42,10 @@ jobs:
 
   floor:
     # The DECLARED dependency floor must actually work. Because
-    # `pip install "wmshare>=3.3.0,<4"` resolves to the newest 3.x, nothing
-    # exercises 3.3.0 unless it is pinned BEFORE the package install (pip then
-    # keeps the already-satisfied version). Measured 2026-11-24: the full
-    # Tier-1 suite passes on 3.3.0, so the floor in pyproject is real.
+    # `pip install "wmshare>=4.0,<5"` resolves to the newest 4.x, nothing
+    # exercises 4.0.0 unless it is pinned BEFORE the package install (pip then
+    # keeps the already-satisfied version). Measured 2026-11-25: the full
+    # Tier-1 suite passes on 4.0.0, so the floor in pyproject is real.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,7 +55,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install wmshare AT THE FLOOR (pinned, before the package)
-        run: pip install "wmshare==3.3.0"
+        run: pip install "wmshare==4.0.0"
 
       - name: Install package + test deps (must not upgrade wmshare)
         run: pip install -e '.[test]'
@@ -144,8 +144,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install wmshare (PyPI, newest 3.x)
-        run: pip install "wmshare>=3.3.0,<4"
+      - name: Install wmshare (PyPI, newest 4.x)
+        run: pip install "wmshare>=4.0,<5"
 
       - name: Install package + [qlib,test] extras (no manual pins)
         run: pip install -e '.[qlib,test]'

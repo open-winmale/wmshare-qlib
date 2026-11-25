@@ -9,6 +9,16 @@ major versions.
 
 ## [Unreleased]
 
+### Changed (BREAKING)
+
+- The supported upstream window moves to **`wmshare>=4.0,<5`** (was
+  `>=3.3.0,<4`). Upstream wmshare reset its release line at 4.0.0 (MAJOR over
+  the 3.7.1 end-of-line, functionally identical), and this adapter follows
+  the new line — no code changes needed: the full Tier-1 suite passes on both
+  the 4.0.0 floor and the current newest 4.x (4.2.2). Installs pinned to the
+  wmshare 3.x line stop resolving; upgrade to wmshare >=4 first. CI's `floor`
+  job now pins `wmshare==4.0.0` for the same reason.
+
 ### Docs
 
 - Internal: Phase 2 (mv-family 60-day deepening) execution record added —

@@ -2,9 +2,9 @@
 write-universe / reconcile-daily-basic / verify.
 
 Since 0.7.0 there is ONE data mode (live). Without credentials the client is
-a public-pool free-trial client (wmshare >=3.3.0); ``--anonymous`` forces
-that mode even when credentials exist. The offline demo snapshot was retired
-together with the SDK's ``demo_client`` (removed in wmshare 3.0).
+a public-pool free-trial client; ``--anonymous`` forces that mode even when
+credentials exist. The offline demo snapshot was retired together with the
+SDK's ``demo_client`` (removed in wmshare 3.0).
 """
 
 from __future__ import annotations
