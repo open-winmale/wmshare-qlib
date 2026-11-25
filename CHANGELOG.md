@@ -9,6 +9,16 @@ major versions.
 
 ## [Unreleased]
 
+### Docs
+
+- Internal: Phase 2 (mv-family 60-day deepening) execution record added —
+  49 batches all green, per-symbol mv depth ≥60 days verified for the full
+  5,694-symbol universe; Gate A round-2 re-audit proves rewrite idempotency
+  (99.942% bit-identical, residual confined to the 3 known upstream
+  window-dependence tickets); unclosed-day phantom-row defect and the daily
+  guard's blind spot to future-dated rows documented with improvement items
+  (docs/internal/full-market-expansion-review.md §7).
+
 ## [1.0.0] - 2026-11-25
 
 ### Removed (BREAKING)
