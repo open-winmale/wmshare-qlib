@@ -1,0 +1,278 @@
+"""Qlib-compatible .bin dumper (Qlib-free; contract lives in format.py).
+
+This module writes the on-disk layout that Qlib's
+``qlib.data.storage.file_storage.FileFeatureStorage`` reads::
+
+  calendars/day.txt          one YYYY-MM-DD per line (ascending)
+  instruments/all.txt        <symbol>\\t<start>\\t<end>
+  features/<inst>/<field>.<freq>.bin
+      = np.hstack([start_index, values_from_start_index_onward]).astype("<f")
+
+The binary contract is centralized in format.py (single source of truth) so a
+future Qlib format change is confined to that file. The payload is sliced to the
+instrument's own [first, last] date -- the same shape Qlib's own dump_bin writes
+-- because Qlib resolves calendar[i] as payload[i - start_index]. Read-back
+verification with Qlib's own reader is delegated to qlib_io.verify_bin(), which
+runs in a child process and never imports Qlib into this pipeline.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pandas as pd
+
+from . import format
+
+
+def _append_vwap(panel: pd.DataFrame) -> pd.DataFrame:
+    """Derive ``vwap = amount / volume`` rows (dump-time, single point).
+
+    Qlib's bundled cn_data ships a ``$vwap`` field and Alpha158 consumes it; the
+    upstream kline surface has no vwap (verified 2026-11-20: bar rows carry
+    open/high/low/close/volume/amount/percent only). The stored ``volume`` is
+    ALREADY divided by the adjustment factor (see config ADJUSTMENT_MODES notes),
+    so ``amount / volume`` here is consistent with the adjusted (hfq) ``close``
+    and satisfies the same ``close * volume == amount`` invariant.
+
+    Rows with non-positive or missing volume (suspension days) are skipped -
+    the calendar reindex in dump_panel turns that into NaN, i.e. honest missing
+    data, never zeros. Called from dump_panel so bulk dumps, incremental
+    re-dumps and old fragment stores (which lack a vwap column) all emit it.
+    """
+    fields = set(panel["field"].unique())
+    if not {"amount", "volume"}.issubset(fields):
+        return panel
+    amount = panel.loc[panel["field"] == "amount", ["date", "instrument", "value"]]
+    volume = panel.loc[panel["field"] == "volume", ["date", "instrument", "value"]]
+    merged = amount.merge(volume, on=["date", "instrument"], suffixes=("_amount", "_volume"))
+    merged = merged[merged["value_volume"] > 0]
+    if merged.empty:
+        return panel
+    derived = pd.DataFrame(
+        {
+            "date": merged["date"],
+            "instrument": merged["instrument"],
+            "field": "vwap",
+            "value": merged["value_amount"] / merged["value_volume"],
+        }
+    )
+    return pd.concat([panel, derived], ignore_index=True)
+
+
+def build_calendar(panel: pd.DataFrame) -> list[str]:
+    return sorted(panel["date"].unique().tolist())
+
+
+def write_calendar(qlib_dir: Path, calendar: list[str]) -> None:
+    d = qlib_dir / "calendars"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "day.txt").write_text("\n".join(calendar) + "\n", encoding="utf-8")
+
+
+def write_instruments(qlib_dir: Path, panel: pd.DataFrame) -> None:
+    d = qlib_dir / "instruments"
+    d.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for instrument, grp in panel.groupby("instrument"):
+        dates = sorted(grp["date"].unique())
+        rows.append(f"{instrument}\t{dates[0]}\t{dates[-1]}")
+    (d / "all.txt").write_text("\n".join(sorted(rows)) + "\n", encoding="utf-8")
+
+
+def dump_panel(panel: pd.DataFrame, qlib_dir: str | Path, *, freq: str = "day") -> dict:
+    """Dump a long panel [date, instrument, field, value] into Qlib .bin format.
+
+    The output directory is made to match THIS panel exactly: .bin files left by
+    an earlier dump (different universe/calendar) are pruned, because Qlib reads
+    whatever file exists and would serve a stale file against the new calendar.
+
+    Returns a manifest with per-field stats for the verify step.
+    """
+    qlib_dir = Path(qlib_dir)
+    qlib_dir.mkdir(parents=True, exist_ok=True)
+    need = {"date", "instrument", "field", "value"}
+    missing = need - set(panel.columns)
+    if missing:
+        raise ValueError(f"panel missing columns: {missing}")
+
+    panel = _append_vwap(panel)
+    calendar = build_calendar(panel)
+    cal_index = {d: i for i, d in enumerate(calendar)}
+    write_calendar(qlib_dir, calendar)
+    write_instruments(qlib_dir, panel)
+
+    manifest: dict[str, object] = {
+        "calendar": [calendar[0], calendar[-1], len(calendar)],
+        "instruments": int(panel["instrument"].nunique()),
+        "fields": {},
+        "freq": freq,
+        "format": format.FORMAT_CONTRACT["version"],
+    }
+    fields_stat: dict[str, dict] = {}
+    written: set[Path] = set()
+
+    for instrument, grp in panel.groupby("instrument"):
+        inst_dates = sorted(grp["date"].unique())
+        start_idx = cal_index[inst_dates[0]]
+        # The payload must START at start_idx and END at the instrument's own
+        # last date: Qlib resolves calendar[i] as payload[i - start_index]
+        # (file_storage.FileFeatureStorage: seek(4*(i-start_idx)+4)), and its
+        # dump_bin slices the calendar to the instrument's [min, max] before
+        # writing. Padding the head (values from calendar[0]) shifted every
+        # instrument whose first date was not calendar[0]; padding the tail
+        # made instrument_date_ranges claim coverage past the last real bar.
+        end_idx = cal_index[inst_dates[-1]]
+        for field, fgrp in grp.groupby("field"):
+            # De-duplicate (a date may appear twice if two sources overlap),
+            # then align to the FULL calendar and keep only [start_idx, end_idx].
+            dedup = fgrp.groupby("date", as_index=False)["value"].last()
+            series = dedup.set_index("date")["value"].reindex(calendar)
+            payload = series.to_numpy(dtype="float32")[start_idx : end_idx + 1]
+            buf = format.encode_bin(start_idx, payload)
+            out = format.bin_path(qlib_dir, instrument, field, freq)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            buf.tofile(out)
+            written.add(out.resolve())
+            fs = fields_stat.setdefault(field, {"files": 0, "non_null": 0, "null": 0})
+            fs["files"] += 1
+            fs["non_null"] += int(series.notna().sum())
+            fs["null"] += int(series.isna().sum())
+
+    # Prune stale .bin files left by an EARLIER dump of this directory. Qlib
+    # reads whatever file exists, so a leftover instrument/field from a dump
+    # with a different calendar would be served against the NEW calendar -
+    # silently wrong dates, no error. The output dir is exactly this dump.
+    removed = 0
+    features = qlib_dir / "features"
+    pattern = f"*.{freq.lower()}.bin"
+    for inst_dir in sorted(p for p in features.iterdir() if p.is_dir()):
+        for stale in sorted(inst_dir.glob(pattern)):
+            if stale.resolve() not in written:
+                stale.unlink()
+                removed += 1
+        if not any(inst_dir.iterdir()):
+            inst_dir.rmdir()
+    manifest["removed"] = removed
+
+    manifest["fields"] = fields_stat
+    return manifest
+
+
+def instrument_date_ranges(
+    qlib_dir: str | Path, *, freq: str = "day", field: str = "close"
+) -> dict[str, tuple[str, str]]:
+    """Per-instrument data coverage [start, end] read from the .bin headers.
+
+    P1-1: universe files must carry Qlib-convention membership ranges. The
+    honest range is what the dump actually CONTAINS (start_index + payload
+    length vs the global calendar) - not the full calendar, which would pretend
+    suspended/late-listed instruments traded on days they did not. The payload
+    is sliced to the instrument's own [first, last] date (see dump_panel), so
+    the length is the real coverage even when the global calendar extends
+    further on either side. Instruments lacking the anchor field's .bin are
+    skipped (reported by the caller), never fabricated.
+    """
+    import numpy as np
+
+    calendar = format.read_calendar(qlib_dir, freq=freq)
+    features = Path(qlib_dir) / "features"
+    if not calendar or not features.exists():
+        return {}
+    out: dict[str, tuple[str, str]] = {}
+    for inst_dir in sorted(p for p in features.iterdir() if p.is_dir()):
+        bin_file = inst_dir / f"{field}.{freq}.bin"
+        if not bin_file.exists():
+            continue
+        arr = np.fromfile(bin_file, dtype="<f4")
+        if arr.size < 2:
+            continue
+        start_index = int(arr[0])
+        length = arr.size - 1
+        end_index = min(start_index + length - 1, len(calendar) - 1)
+        if not (0 <= start_index < len(calendar)) or start_index > end_index:
+            continue
+        out[inst_dir.name.upper()] = (calendar[start_index], calendar[end_index])
+    return out
+
+
+def write_universe_file(
+    qlib_dir: str | Path,
+    name: str,
+    ranges: dict[str, tuple[str, str]],
+) -> Path:
+    """Write ``instruments/<name>.txt`` (Qlib convention: INST\\tstart\\tend).
+
+    ``D.instruments("<name>")`` then works directly. Rows are sorted for
+    deterministic diffs; the name is validated (no path tricks).
+    """
+    import re
+
+    if not re.fullmatch(r"[A-Za-z0-9_\-]+", name):
+        raise ValueError(f"universe name {name!r} must be [A-Za-z0-9_-]+")
+    inst_dir = Path(qlib_dir) / "instruments"
+    inst_dir.mkdir(parents=True, exist_ok=True)
+    out = inst_dir / f"{name}.txt"
+    lines = [f"{inst}\t{start}\t{end}" for inst, (start, end) in sorted(ranges.items())]
+    out.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    return out
+
+
+def universe_episodes_from_history(
+    history: dict[str, set[str]],
+) -> dict[str, list[tuple[str, str]]]:
+    """Fold daily membership snapshots into per-instrument episodes (PIT).
+
+    ``history`` maps ISO day -> the set of members on that day (ascending days
+    enforced by sorting here). PIT semantics:
+
+    - an instrument that stays a member extends its OPEN episode;
+    - a re-entry after a gap opens a NEW episode (Qlib instruments natively
+      support multiple rows per instrument, and ``D.instruments`` resolves
+      membership point-in-time from them);
+    - episodes of dropped members stay CLOSED at their last seen day and are
+      never deleted - that is the whole point of a point-in-time universe
+      (deleting them would silently reintroduce survivorship bias).
+
+    Pure function: no I/O, offline-testable.
+    """
+    episodes: dict[str, list[tuple[str, str]]] = {}
+    prev: set[str] | None = None
+    for day in sorted(history):
+        cur = set(history[day])
+        for inst in sorted(cur):
+            open_ep = episodes.get(inst)
+            if prev is not None and inst in prev and open_ep:
+                start, _end = open_ep[-1]
+                open_ep[-1] = (start, day)
+            else:
+                episodes.setdefault(inst, []).append((day, day))
+        prev = cur
+    return episodes
+
+
+def write_universe_episodes_file(
+    qlib_dir: str | Path,
+    name: str,
+    episodes: dict[str, list[tuple[str, str]]],
+) -> Path:
+    """Write ``instruments/<name>.txt`` with per-instrument membership episodes.
+
+    Same on-disk convention as :func:`write_universe_file` (one ``INST\\tstart\\tend``
+    row per episode; Qlib resolves PIT membership from multiple rows per
+    instrument). Rows are sorted for deterministic diffs.
+    """
+    import re
+
+    if not re.fullmatch(r"[A-Za-z0-9_\-]+", name):
+        raise ValueError(f"universe name {name!r} must be [A-Za-z0-9_-]+")
+    inst_dir = Path(qlib_dir) / "instruments"
+    inst_dir.mkdir(parents=True, exist_ok=True)
+    out = inst_dir / f"{name}.txt"
+    lines = [
+        f"{inst}\t{start}\t{end}"
+        for inst in sorted(episodes)
+        for (start, end) in episodes[inst]
+    ]
+    out.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    return out

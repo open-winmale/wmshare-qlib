@@ -1,0 +1,154 @@
+# CI: Tier-1 tests on every push/PR (zero Qlib, zero credentials, offline).
+# The qlib-extra job installs '.[qlib,test]' with NO manual constraints and runs
+# the FULL suite there (Qlib read-back included): the [qlib] extra must resolve
+# to a working environment on its own. That job is BLOCKING on purpose — 0.5.0
+# shipped a broken extra (pyarrow 26 needs numpy>=2 at runtime; the extra pins
+# numpy<2) while CI stayed green because tier2 ran only the single qlib-marked
+# test. If pyqlib's wheel ever becomes flaky to install, revisit this trade-off
+# before demoting the job.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # wmshare resolves to the NEWEST 3.x from PyPI (measured 2026-11-24:
+      # 3.5.0), i.e. these jobs exercise the supported path, not the declared
+      # floor. The `floor` job below pins 3.3.0 for that.
+      - name: Install wmshare (PyPI, newest 3.x)
+        run: pip install "wmshare>=3.3.0,<4"
+
+      - name: Install package + test deps
+        run: pip install -e '.[test]'
+
+      - name: Lint (ruff)
+        uses: astral-sh/ruff-action@v3
+        with:
+          version: "0.14.4"
+
+      - name: Tier-1 tests (no Qlib, offline)
+        run: PYTHONPATH=src python -m pytest tests -q -m "not live"
+
+  floor:
+    # The DECLARED dependency floor must actually work. Because
+    # `pip install "wmshare>=3.3.0,<4"` resolves to the newest 3.x, nothing
+    # exercises 3.3.0 unless it is pinned BEFORE the package install (pip then
+    # keeps the already-satisfied version). Measured 2026-11-24: the full
+    # Tier-1 suite passes on 3.3.0, so the floor in pyproject is real.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install wmshare AT THE FLOOR (pinned, before the package)
+        run: pip install "wmshare==3.3.0"
+
+      - name: Install package + test deps (must not upgrade wmshare)
+        run: pip install -e '.[test]'
+
+      - name: Tier-1 tests on the declared floor
+        run: PYTHONPATH=src python -m pytest tests -q -m "not live"
+
+  package:
+    # Release-readiness gates: the package must build, its metadata must be
+    # complete, and its docs must not link to files that do not exist.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+
+      - name: Twine check (metadata renders on PyPI)
+        run: python -m twine check dist/*
+
+      - name: Wheel contains py.typed and the package
+        run: |
+          python - <<'PY'
+          import zipfile, pathlib, sys
+          whl = sorted(pathlib.Path("dist").glob("*.whl"))[0]
+          names = zipfile.ZipFile(whl).namelist()
+          required = ["wmshare_qlib/__init__.py", "wmshare_qlib/py.typed",
+                      "wmshare_qlib/cli.py"]
+          missing = [r for r in required if r not in names]
+          if missing:
+              print("missing from wheel:", missing); sys.exit(1)
+          print(f"wheel ok: {len(names)} entries")
+          PY
+
+      - name: Relative doc links resolve
+        run: |
+          python - <<'PY'
+          import pathlib, re, sys
+          root = pathlib.Path(".")
+          bad = []
+          for md in list(root.glob("*.md")) + list((root / "docs").glob("*.md")):
+              for target in re.findall(r"\]\(([^)#:]+)(?:#[^)]*)?\)", md.read_text(encoding="utf-8")):
+                  if target.startswith(("http://", "https://", "mailto:")):
+                      continue
+                  if not (md.parent / target).exists():
+                      bad.append(f"{md}: {target}")
+          if bad:
+              print("dead relative links:"); [print(" ", b) for b in bad]; sys.exit(1)
+          print("all relative links resolve")
+          PY
+
+      - name: CHANGELOG section extractable for the declared version
+        run: |
+          ver="$(python -c 'import re,pathlib;print(re.search(r"__version__ = \"([^\"]+)\"", pathlib.Path("src/wmshare_qlib/__init__.py").read_text(encoding="utf-8")).group(1))')"
+          python tools/changelog_section.py "$ver" --check
+
+      - name: Install the built wheel and smoke-test the CLI
+        run: |
+          python -m venv /tmp/wheelvenv
+          /tmp/wheelvenv/bin/pip install --quiet dist/*.whl
+          /tmp/wheelvenv/bin/wmshare-qlib --help > /tmp/help.txt
+          for cmd in dump-history update-history dump-cross-section accumulate \
+                     write-universe verify reconcile-daily-basic; do
+            grep -q "$cmd" /tmp/help.txt || { echo "::error::$cmd missing from --help"; exit 1; }
+          done
+          echo "all seven subcommands present"
+          /tmp/wheelvenv/bin/wmshare-qlib --version | grep -q . \
+            || { echo "::error::--version printed nothing"; exit 1; }
+          echo "--version ok: $(/tmp/wheelvenv/bin/wmshare-qlib --version)"
+
+  qlib-extra:
+    # BLOCKING: install the extras exactly as a user would (no manual pins) and
+    # run the FULL suite inside that environment, Qlib read-back included.
+    # Single interpreter: 3.11 — the only supported one (see header comment).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install wmshare (PyPI, newest 3.x)
+        run: pip install "wmshare>=3.3.0,<4"
+
+      - name: Install package + [qlib,test] extras (no manual pins)
+        run: pip install -e '.[qlib,test]'
+
+      - name: Full suite inside the qlib environment (incl. Qlib read-back)
+        run: PYTHONPATH=src python -m pytest tests -q -m "not live"

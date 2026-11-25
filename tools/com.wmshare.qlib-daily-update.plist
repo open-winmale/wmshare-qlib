@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template: replace __REPO__ with the absolute repo path at install time
+     (see docs/getting-started.md "Local automation"). launchd does not load
+     your shell profile, so daily_update.sh resolves everything from absolute
+     paths inside the repo; credentials come from ~/.wmshare/credentials.env
+     which the SDK reads directly (no shell env needed). -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.wmshare.qlib-daily-update</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__REPO__/tools/daily_update.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__REPO__</string>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>17</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>__REPO__/out/logs/launchd.log</string>
+    <key>StandardErrPath</key>
+    <string>__REPO__/out/logs/launchd.log</string>
+</dict>
+</plist>

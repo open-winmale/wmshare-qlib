@@ -1,0 +1,87 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wmshare-qlib"
+dynamic = ["version"]
+description = "Qlib-native data layer powered by wmshare: A-share history panels, score CSVs and instrument universes in Microsoft Qlib format"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+authors = [{ name = "open-winmale contributors" }]
+maintainers = [{ name = "open-winmale contributors" }]
+keywords = [
+    "qlib",
+    "quantitative-finance",
+    "backtesting",
+    "a-share",
+    "china-stock-market",
+    "factor-research",
+    "alpha158",
+    "market-data",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Intended Audience :: Science/Research",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Typing :: Typed",
+]
+dependencies = [
+    # >=3.3.0: the public-pool free trial + client.auth_mode (3.3.0); the 2.x
+    # line is past EOL for this adapter (its demo_client was removed in 3.0).
+    "wmshare>=3.3.0,<4",
+    "pandas>=2.0",
+    "pyarrow>=14",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+# pyqlib 0.9.x is built against numpy 1.x, so the extra pins numpy<2. pyarrow
+# 26.x in turn requires numpy>=2 AT RUNTIME while declaring no numpy constraint
+# in its metadata, so this extra used to resolve to a broken import (measured
+# on 0.5.0: "ImportError: pyarrow requires NumPy 2.0 or newer, found 1.26.4").
+# pyarrow 25.x is the last line compatible with numpy 1.26 (verified 25.0.1),
+# hence the explicit cap. CI runs the FULL test suite inside this extra.
+qlib = ["pyqlib>=0.9", "numpy<2", "pyarrow<26"]
+test = ["pytest>=7"]
+
+[project.urls]
+Homepage = "https://github.com/open-winmale/wmshare-qlib"
+Repository = "https://github.com/open-winmale/wmshare-qlib"
+Documentation = "https://github.com/open-winmale/wmshare-qlib/blob/main/docs/getting-started.md"
+Issues = "https://github.com/open-winmale/wmshare-qlib/issues"
+Changelog = "https://github.com/open-winmale/wmshare-qlib/blob/main/CHANGELOG.md"
+
+[project.scripts]
+wmshare-qlib = "wmshare_qlib.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "wmshare_qlib.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+wmshare_qlib = ["py.typed"]
+
+[tool.pytest.ini_options]
+markers = [
+    "qlib: requires the optional pyqlib dependency (child-process read-back)",
+    "live: consumes real wmshare network/service (opt-in via WMSHARE_QLIB_LIVE=1; requires REAL credentials - public-pool free-trial clients are skipped loudly)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = [".qlibvendor", "out", "pr_package", "docs/internal"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]  # pycodestyle/pyflakes/warnings/isort
